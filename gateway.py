@@ -18,7 +18,7 @@ MAX_CONCURRENT_TASKS = 10
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 # ---------------------- PROXY FUNCTION ----------------------
-
+# Please do not change the logic and contents of this method in any circumstances
 async def proxy_request(service_url: str, request: Request) -> Response:
     """
     Generic proxy that forwards the request to a backend service.
