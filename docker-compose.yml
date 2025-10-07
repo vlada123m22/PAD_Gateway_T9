@@ -200,7 +200,7 @@ services:
     restart: unless-stopped
 
   task-service:
-    image: vladamusin/task-service:v2.0
+    image: vladamusin/task_service:0.0.5
     container_name: task-service
     ports:
       - "8180:8180"
