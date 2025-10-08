@@ -1,8 +1,12 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import Response
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import httpx
 import os
 import asyncio
+import jwt
+from typing import Optional, Dict, Any
+from datetime import datetime
 
 app = FastAPI(title="Gateway Service")
 
@@ -16,6 +20,73 @@ BACKEND_TIMEOUT = 5
 # Maximum number of concurrent requests
 MAX_CONCURRENT_TASKS = 10
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+
+# Security scheme
+security = HTTPBearer()
+
+# ---------------------- AUTHORIZATION ----------------------
+
+class AuthUser:
+    """Represents an authenticated user"""
+    def __init__(self, user_id: str, username: str, roles: list[str], character_id: Optional[str] = None, lobby_id: Optional[str] = None):
+        self.user_id = user_id
+        self.username = username
+        self.roles = roles
+        self.character_id = character_id
+        self.lobby_id = lobby_id
+
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> AuthUser:
+    """
+    Verify JWT token and extract user information.
+    This function validates the Authorization header and does NOT forward it to downstream services.
+    """
+    token = credentials.credentials
+    
+    try:
+        # Decode and verify the JWT token
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        
+        # Check token expiration
+        exp = payload.get("exp")
+        if exp and datetime.utcnow().timestamp() > exp:
+            raise HTTPException(status_code=401, detail="Token has expired")
+        
+        # Extract user information
+        user_id = payload.get("user_id")
+        username = payload.get("username")
+        roles = payload.get("roles", [])
+        character_id = payload.get("character_id")
+        
+        if not user_id or not username:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
+        
+        return AuthUser(
+            user_id=user_id,
+            username=username,
+            roles=roles,
+            character_id=character_id
+        )
+        
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Authorization failed: {str(e)}")
+
+def require_roles(*required_roles: str):
+    """
+    Dependency to check if user has required roles.
+    Usage: @app.get("/endpoint", dependencies=[Depends(require_roles("admin"))])
+    """
+    async def role_checker(user: AuthUser = Depends(verify_token)) -> AuthUser:
+        if not any(role in user.roles for role in required_roles):
+            raise HTTPException(
+                status_code=403, 
+                detail=f"Access denied. Required roles: {', '.join(required_roles)}"
+            )
+        return user
+    return role_checker
 
 # ---------------------- PROXY FUNCTION ----------------------
 # Please do not change the logic and contents of this method in any circumstances
