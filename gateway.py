@@ -10,6 +10,7 @@ from datetime import datetime
 from redis import asyncio as aioredis
 import json
 import hashlib
+from typing import List
 
 app = FastAPI(title="Gateway Service")
 
@@ -18,6 +19,8 @@ TASK_SERVICE_URL = os.getenv("TASK_SERVICE_URL", "http://localhost:8180")
 VOTING_SERVICE_URL = os.getenv("VOTING_SERVICE_URL", "http://localhost:8181")
 USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:3000")
 GAME_SERVICE_URL = os.getenv("GAME_SERVICE_URL", "http://game_service:3005")
+SHOP_SERVICE_URL = os.getenv("SHOP_SERVICE_URL", "http://127.0.0.1:8000")
+
 
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
@@ -205,7 +208,6 @@ async def health_check():
 # ---------------------- USER SERVICE ----------------------
 @app.post("/api/users")
 async def create_user(request: Request):
-    """Create user - public endpoint"""
     service_url = f"{USER_SERVICE_URL}/users"
     async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
         backend_response = await client.request(
@@ -224,14 +226,12 @@ async def create_user(request: Request):
 
 @app.get("/api/users")
 async def get_users(request: Request):
-    """Get all users - cached"""
     service_url = f"{USER_SERVICE_URL}/users"
     dummy_user = AuthUser("public", "public", [])
     return await cached_proxy(service_url, request, dummy_user, ttl=15)
 
 @app.get("/api/users/{user_id}")
 async def get_user(user_id: str, request: Request):
-    """Get user by ID - cached"""
     service_url = f"{USER_SERVICE_URL}/users/{user_id}"
     dummy_user = AuthUser("public", "public", [])
     return await cached_proxy(service_url, request, dummy_user, ttl=15)
@@ -257,7 +257,6 @@ async def create_lobby(request: Request):
 
 @app.get("/api/lobbies")
 async def get_lobbies(request: Request):
-    """Get all lobbies - cached"""
     service_url = f"{GAME_SERVICE_URL}/lobbies"
     dummy_user = AuthUser("public", "public", [])
     return await cached_proxy(service_url, request, dummy_user, ttl=10)
@@ -284,7 +283,6 @@ async def join_lobby(lobby_id: str, request: Request):
 
 @app.get("/api/lobbies/{lobby_id}")
 async def get_lobby(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    """Get lobby info - cached and authenticated"""
     service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}"
     return await cached_proxy(service_url, request, user, ttl=10)
 
@@ -294,68 +292,114 @@ async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = D
     return await proxy_request(service_url, request, user)
 
 # ---------------------- TASK SERVICE ----------------------
-
 @app.post("/api/tasks/assign")
 async def task_assign(request: Request, user: AuthUser = Depends(verify_token)):
-    """Assign tasks - requires authentication"""
     service_url = f"{TASK_SERVICE_URL}/api/tasks/assign"
     return await proxy_request(service_url, request, user)
 
 @app.get("/api/tasks/view/{character_id}")
 async def task_view(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    """View tasks - requires authentication and ownership verification"""
-    # Optional: Verify user owns this character or has admin role
     if user.character_id != character_id and "admin" not in user.roles:
         raise HTTPException(status_code=403, detail="You can only view your own character's tasks")
-    
     service_url = f"{TASK_SERVICE_URL}/api/tasks/view/{character_id}"
     return await proxy_request(service_url, request, user)
 
 @app.post("/api/tasks/complete/{task_id}/{character_id}")
-async def task_complete(
-    task_id: int, 
-    character_id: int, 
-    request: Request, 
-    user: AuthUser = Depends(verify_token)
-):
-    """Complete task - requires authentication and ownership verification"""
-    # Optional: Verify user owns this character or has admin role
+async def task_complete(task_id: int, character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
     if user.character_id != character_id and "admin" not in user.roles:
         raise HTTPException(status_code=403, detail="You can only complete tasks for your own character")
-    
     service_url = f"{TASK_SERVICE_URL}/api/tasks/complete/{task_id}/{character_id}"
     return await proxy_request(service_url, request, user)
 
 # ---------------------- VOTING SERVICE ----------------------
-
 @app.get("/api/voting/results/{lobby_id}")
 async def voting_results(lobby_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    """Get voting results - requires authentication"""
     service_url = f"{VOTING_SERVICE_URL}/api/voting/results/{lobby_id}"
     return await proxy_request(service_url, request, user)
 
 @app.post("/api/voting/cast")
 async def voting_cast(request: Request, user: AuthUser = Depends(verify_token)):
-    """Cast a vote - requires authentication"""
     service_url = f"{VOTING_SERVICE_URL}/api/voting/cast"
     return await proxy_request(service_url, request, user)
 
-# ---------------------- ADMIN ENDPOINTS (EXAMPLE) ----------------------
+# ---------------------- SHOP SERVICE (using @app) ----------------------
+@app.get("/api/shop/items")
+async def get_shop_items(request: Request, user: AuthUser = Depends(verify_token)):
+    role_response = await proxy_request(f"{SHOP_SERVICE_URL}/api/characters/{user.character_id}/role", request, user)
+    if role_response.status_code != 200:
+        raise HTTPException(status_code=role_response.status_code, detail="Failed to fetch character role")
+    role_data = await role_response.json()
+    character_role = role_data.get("role")
 
+    items_response = await cached_proxy(f"{SHOP_SERVICE_URL}/items", request, user, ttl=30)
+    if items_response.status_code != 200:
+        raise HTTPException(status_code=items_response.status_code, detail="Failed to fetch shop items")
+
+    all_items = await items_response.json()
+    filtered_items = [item for item in all_items if character_role in item.get("allowed_roles", [])]
+
+    return {"items": filtered_items}
+
+@app.post("/api/shop/buy")
+async def buy_item(request: Request, user: AuthUser = Depends(verify_token)):
+    purchase_data = await request.json()
+    item_id = purchase_data.get("item_id")
+    quantity = purchase_data.get("quantity", 1)
+    if not item_id:
+        raise HTTPException(status_code=400, detail="Missing item_id in request")
+
+    item_response = await cached_proxy(f"{SHOP_SERVICE_URL}/items/{item_id}", request, user, ttl=30)
+    if item_response.status_code != 200:
+        raise HTTPException(status_code=404, detail="Item not found")
+    item = await item_response.json()
+    total_price = item["price"] * quantity
+
+    currency_response = await proxy_request(f"{SHOP_SERVICE_URL}/api/characters/{user.character_id}/currency", request, user)
+    if currency_response.status_code != 200:
+        raise HTTPException(status_code=currency_response.status_code, detail="Failed to fetch currency")
+    currency_data = await currency_response.json()
+    current_currency = currency_data.get("currency", 0)
+    if current_currency < total_price:
+        raise HTTPException(status_code=400, detail="Insufficient currency")
+
+    purchase_response = await proxy_request(f"{SHOP_SERVICE_URL}/api/characters/{user.character_id}/purchase", request, user)
+    if purchase_response.status_code != 200:
+        raise HTTPException(status_code=purchase_response.status_code, detail="Failed to complete purchase")
+
+    return {"success": True, "item": item, "quantity": quantity, "total_price": total_price}
+
+@app.get("/api/shop/inventory")
+async def get_inventory(request: Request, user: AuthUser = Depends(verify_token)):
+    return await cached_proxy(f"{SHOP_SERVICE_URL}/api/characters/{user.character_id}/inventory", request, user, ttl=15)
+
+# ---------------------- ADMIN ENDPOINTS ----------------------
 @app.get("/api/admin/stats")
 async def admin_stats(request: Request, user: AuthUser = Depends(require_roles("admin"))):
-    """Admin-only endpoint - requires admin role"""
-    # This would call an admin service
     return {"message": "Admin stats", "user": user.username}
 
 # ---------------------- ERROR HANDLERS ----------------------
-
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    """Custom error handler for better error messages"""
     return Response(
         content=f'{{"detail": "{exc.detail}"}}',
         status_code=exc.status_code,
         media_type="application/json"
     )
 
+# ---------------------- MOCK ENDPOINTS FOR SHOP TESTING ----------------------
+@app.get("/api/characters/{character_id}/role")
+async def mock_character_role(character_id: str):
+    return {"character_id": character_id, "role": "player"}
+
+@app.get("/api/characters/{character_id}/currency")
+async def mock_character_currency(character_id: str):
+    return {"character_id": character_id, "currency": 500}
+
+@app.post("/api/characters/{character_id}/purchase")
+async def mock_character_purchase(character_id: str, request: Request):
+    purchase_data = await request.json()
+    return {"character_id": character_id, "purchased": purchase_data, "status": "success"}
+
+@app.get("/api/characters/{character_id}/inventory")
+async def mock_character_inventory(character_id: str):
+    return {"character_id": character_id, "items": [{"id": 1, "name": "Sword", "quantity": 1},{"id": 2, "name": "Shield", "quantity": 1}]}
