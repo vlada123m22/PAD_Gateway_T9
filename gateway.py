@@ -133,6 +133,19 @@ class AuthUser:
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> AuthUser:
     token = credentials.credentials
+    cache_key = f"auth:{token}"
+
+    # 1Try Redis first
+    if redis_client:
+        cached_user = await redis_client.get(cache_key)
+        if cached_user:
+            data = json.loads(cached_user)
+            print("[AUTH CACHE] HIT:", cache_key)
+            return AuthUser(**data)
+        else:
+            print("[AUTH CACHE] MISS:", cache_key)
+
+    # Decode JWT normally
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         exp = payload.get("exp")
@@ -142,15 +155,32 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         username = payload.get("username")
         roles = payload.get("roles", [])
         character_id = payload.get("character_id")
+
         if not user_id or not username:
             raise HTTPException(status_code=401, detail="Invalid token payload")
-        return AuthUser(user_id, username, roles, character_id)
+
+        user_data = {
+            "user_id": user_id,
+            "username": username,
+            "roles": roles,
+            "character_id": character_id,
+        }
+        user = AuthUser(**user_data)
+
+        # Store in Redis (cache token for e.g. 1 hour)
+        if redis_client:
+            await redis_client.setex(cache_key, 3600, json.dumps(user_data))
+            print("[AUTH CACHE] Stored:", cache_key)
+
+        return user
+
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Authorization failed: {str(e)}")
+
 
 def require_roles(*required_roles: str):
     async def role_checker(user: AuthUser = Depends(verify_token)) -> AuthUser:
