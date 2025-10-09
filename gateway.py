@@ -28,6 +28,7 @@ semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 security = HTTPBearer()
 
+
 # ---------------------- CACHE CONFIG ----------------------
 CACHE_URL = os.getenv("CACHE_URL", "redis://localhost:6379")
 CACHE_DEFAULT_TTL = int(os.getenv("CACHE_DEFAULT_TTL", "15"))  # seconds
@@ -130,6 +131,9 @@ class AuthUser:
         self.roles = roles
         self.character_id = character_id
         self.lobby_id = lobby_id
+
+
+dummy_user = AuthUser("public", "public", [])
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> AuthUser:
     token = credentials.credentials
@@ -259,7 +263,6 @@ async def create_lobby(request: Request):
 async def get_lobbies(request: Request):
     """Get all lobbies - cached"""
     service_url = f"{GAME_SERVICE_URL}/lobbies"
-    dummy_user = AuthUser("public", "public", [])
     return await cached_proxy(service_url, request, dummy_user, ttl=10)
 
 @app.post("/api/lobbies/{lobby_id}/join")
@@ -302,19 +305,19 @@ async def task_assign(request: Request, user: AuthUser = Depends(verify_token)):
     return await proxy_request(service_url, request, user)
 
 @app.get("/api/tasks/view/{character_id}")
-async def task_view(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+async def task_view(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
     """View tasks - requires authentication and ownership verification"""
     # Optional: Verify user owns this character or has admin role
     if user.character_id != character_id and "admin" not in user.roles:
         raise HTTPException(status_code=403, detail="You can only view your own character's tasks")
     
     service_url = f"{TASK_SERVICE_URL}/api/tasks/view/{character_id}"
-    return await proxy_request(service_url, request, user)
+    return await cached_proxy(service_url, request, dummy_user, ttl=15)
 
 @app.post("/api/tasks/complete/{task_id}/{character_id}")
 async def task_complete(
     task_id: int, 
-    character_id: int, 
+    character_id: str,
     request: Request, 
     user: AuthUser = Depends(verify_token)
 ):
@@ -332,7 +335,7 @@ async def task_complete(
 async def voting_results(lobby_id: int, request: Request, user: AuthUser = Depends(verify_token)):
     """Get voting results - requires authentication"""
     service_url = f"{VOTING_SERVICE_URL}/api/voting/results/{lobby_id}"
-    return await proxy_request(service_url, request, user)
+    return await cached_proxy(service_url, request, dummy_user, ttl=10)
 
 @app.post("/api/voting/cast")
 async def voting_cast(request: Request, user: AuthUser = Depends(verify_token)):
@@ -358,4 +361,3 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         status_code=exc.status_code,
         media_type="application/json"
     )
-

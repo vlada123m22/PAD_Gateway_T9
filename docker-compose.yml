@@ -196,7 +196,7 @@ services:
       timeout: 5s
 
   voting-service:
-    image: vladamusin/voting-service:v2.0
+    image: vladamusin/voting_service:0.0.4
     container_name: voting-service
     ports:
       - "8181:8181"
@@ -212,7 +212,7 @@ services:
     restart: unless-stopped
 
   task-service:
-    image: vladamusin/task_service:0.0.5
+    image: vladamusin/task_service:0.0.8
     container_name: task-service
     ports:
       - "8180:8180"
