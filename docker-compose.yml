@@ -1,23 +1,24 @@
 services:
   gateway:
-    image: nadea39/gateway:v1.0.5
+    build: .
     container_name: gateway_container
     ports:
       - "8000:8000"
     environment:
-      - TASK_SERVICE_URL: http://task-service:8180
-      - VOTING_SERVICE_URL: http://voting-service:8181
-      - GAME_SERVICE_URL: http://game_service:3005
-      - USER_SERVICE_URL: http://user_service:3000
-      - JWT_SECRET: ${JWT_SECRET}
-      - JWT_ALGORITHM: ${JWT_ALGORITHM}
+      TASK_SERVICE_URL: http://task-service:8180
+      VOTING_SERVICE_URL: http://voting-service:8181
+      GAME_SERVICE_URL: http://game_service:3005
+      USER_SERVICE_URL: http://user_service:3000
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM}
+
     depends_on:
       - task-service
       - voting-service
       - game_service
       - user_service
     networks:
-      - game_network
+      - backend
 
   mongo:
     image: mongo:6
@@ -26,7 +27,7 @@ services:
     volumes:
       - mongo_data:/data/db
     networks:
-      - game_network
+      - backend
 
   user_service:
     image: nadea39/user-management-service:1.7
@@ -41,7 +42,7 @@ services:
     depends_on:
       - mongo
     networks:
-      - game_network
+      - backend
     env_file:
       - .env
 
@@ -61,7 +62,7 @@ services:
       - mongo
       - user_service
     networks:
-      - game_network
+      - backend
 
   db_userm_populator:
     image: nadea39/user-management-service:1.0
