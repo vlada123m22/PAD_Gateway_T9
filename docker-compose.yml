@@ -1,6 +1,6 @@
 services:
   gateway:
-    image: nadea39/gateway:v1.0.5
+    image: nadea39/gateway:v1.0.8
     container_name: gateway_container
     ports:
       - "8000:8000"
@@ -17,7 +17,7 @@ services:
       - game_service
       - user_service
     networks:
-      - game_network
+      - backend
 
   mongo:
     image: mongo:6
@@ -26,7 +26,16 @@ services:
     volumes:
       - mongo_data:/data/db
     networks:
-      - game_network
+      - backend
+  
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+    #env_file:
+     # - .env
 
   user_service:
     image: nadea39/user-management-service:1.7
@@ -41,9 +50,9 @@ services:
     depends_on:
       - mongo
     networks:
-      - game_network
-    env_file:
-      - .env
+      - backend
+    #env_file:
+     # - .env
 
   game_service:
     image: nadea39/gameservice:v1.0.5
@@ -61,7 +70,7 @@ services:
       - mongo
       - user_service
     networks:
-      - game_network
+      - backend
 
   db_userm_populator:
     image: nadea39/user-management-service:1.0
