@@ -152,14 +152,72 @@ async def health_check():
     """Public health check endpoint"""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
-# ---------------------- GAME SERVICE ----------------------
-GAME_SERVICE_URL = os.getenv("GAME_SERVICE_URL", "http://localhost:8000")
+# ---------------------- USER SERVICE ----------------------
+USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:3000")
 
 # Public endpoints - no authentication required
+@app.post("/api/users")
+async def create_user(request: Request):
+    """Create user - public endpoint"""
+    service_url = f"{USER_SERVICE_URL}/users"  # Note: /users not /api/users
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+            content=await request.body(),
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
+
+@app.get("/api/users")
+async def get_users(request: Request):
+    """Get all users - public endpoint"""
+    service_url = f"{USER_SERVICE_URL}/users"
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
+
+@app.get("/api/users/{user_id}")
+async def get_user(user_id: str, request: Request):
+    """Get user by ID - public endpoint"""
+    service_url = f"{USER_SERVICE_URL}/users/{user_id}"
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
+
+# ---------------------- GAME SERVICE ----------------------
+GAME_SERVICE_URL = os.getenv("GAME_SERVICE_URL", "http://game_service:3005")
+
 @app.post("/api/lobbies")
 async def create_lobby(request: Request):
     """Create lobby - public endpoint"""
-    service_url = f"{GAME_SERVICE_URL}/api/lobbies"
+    service_url = f"{GAME_SERVICE_URL}/lobbies"
     async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
         backend_response = await client.request(
             method=request.method,
@@ -178,7 +236,7 @@ async def create_lobby(request: Request):
 @app.get("/api/lobbies")
 async def get_lobbies(request: Request):
     """Get all lobbies - public endpoint"""
-    service_url = f"{GAME_SERVICE_URL}/api/lobbies"
+    service_url = f"{GAME_SERVICE_URL}/lobbies"
     async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
         backend_response = await client.request(
             method=request.method,
@@ -196,12 +254,15 @@ async def get_lobbies(request: Request):
 @app.post("/api/lobbies/{lobby_id}/join")
 async def join_lobby(lobby_id: str, request: Request):
     """Join lobby - public endpoint, returns JWT token"""
-    service_url = f"{GAME_SERVICE_URL}/api/lobbies/{lobby_id}/join"
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/join"
     async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        headers = {k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"}
+        headers["X-Lobby-ID"] = lobby_id
+
         backend_response = await client.request(
             method=request.method,
             url=service_url,
-            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            headers=headers,
             params=request.query_params,
             content=await request.body(),
         )
@@ -215,13 +276,13 @@ async def join_lobby(lobby_id: str, request: Request):
 @app.get("/api/lobbies/{lobby_id}")
 async def get_lobby(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
     """Get lobby info - requires authentication"""
-    service_url = f"{GAME_SERVICE_URL}/api/lobbies/{lobby_id}"
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}"
     return await proxy_request(service_url, request, user)
 
 @app.patch("/api/lobbies/{lobby_id}/state")
 async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
     """Update lobby state - requires authentication"""
-    service_url = f"{GAME_SERVICE_URL}/api/lobbies/{lobby_id}/state"
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/state"
     return await proxy_request(service_url, request, user)
 
 # ---------------------- TASK SERVICE ----------------------

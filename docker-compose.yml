@@ -1,17 +1,23 @@
 services:
   gateway:
-    build: .
-    container_name: gateway
+    image: nadea39/gateway:v1.0.5
+    container_name: gateway_container
     ports:
       - "8000:8000"
     environment:
-      TASK_SERVICE_URL: http://task-service:8180
-      VOTING_SERVICE_URL: http://voting-service:8181
+      - TASK_SERVICE_URL: http://task-service:8180
+      - VOTING_SERVICE_URL: http://voting-service:8181
+      - GAME_SERVICE_URL: http://game_service:3005
+      - USER_SERVICE_URL: http://user_service:3000
+      - JWT_SECRET: ${JWT_SECRET}
+      - JWT_ALGORITHM: ${JWT_ALGORITHM}
     depends_on:
       - task-service
       - voting-service
+      - game_service
+      - user_service
     networks:
-      - backend
+      - game_network
 
   mongo:
     image: mongo:6
@@ -20,37 +26,42 @@ services:
     volumes:
       - mongo_data:/data/db
     networks:
-      - backend
+      - game_network
 
   user_service:
-    image: nadea39/user-management-service:1.4
+    image: nadea39/user-management-service:1.7
     container_name: user_service_container
     environment:
       - MONGO_URI=${MONGO_URI_USER}
       - USE_MOCKS=true
       - PORT=3000
+      - GAME_SERVICE_URL=${GAME_SERVICE_URL} 
     ports:
       - "3000:3000"
     depends_on:
       - mongo
     networks:
-      - backend
-    #env_file:
-    #  - .env
+      - game_network
+    env_file:
+      - .env
 
   game_service:
-    image: nadea39/gameservice:v1.0.2
+    image: nadea39/gameservice:v1.0.5
     container_name: gameservice_container
     environment:
       - MONGO_URI=${MONGO_URI_GAME}
       - PORT=${PORT}
       - NODE_ENV=${NODE_ENV}
+      - USER_SERVICE_URL=${USER_SERVICE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_ALGORITHM=${JWT_ALGORITHM}
     ports:
       - "3005:3005"
     depends_on:
       - mongo
+      - user_service
     networks:
-      - backend
+      - game_network
 
   db_userm_populator:
     image: nadea39/user-management-service:1.0
