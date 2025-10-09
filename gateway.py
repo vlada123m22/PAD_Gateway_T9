@@ -351,3 +351,4 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         media_type="application/json"
     )
 
+#a test to see if the branch rules where enforced
