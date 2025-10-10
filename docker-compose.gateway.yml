@@ -1,24 +1,130 @@
-version: "3.8"
+version: "3.9"
 
 services:
-  # Redis cache
-  redis:
-    image: redis:7-alpine
-    container_name: gateway_cache
-    ports:
-      - "6379:6379"
-
-  # Gateway service
-  gateway:
+  # ------------------------------------------------
+  # GATEWAY SERVICE
+  # ------------------------------------------------
+  gateway_service:
     build: .
     container_name: gateway_service
     ports:
-      - "8080:8000"
+      - "8000:8000"
     environment:
-      - CACHE_URL=redis://redis:6379
-      - CACHE_DEFAULT_TTL=15
-      # Dummy targets just for testing
-      - TOWN_SERVICE_URL=http://example.com
-      - CHARACTER_SERVICE_URL=http://example.com
+      TOWN_SERVICE_URL: http://townservice:4001
+      CHARACTER_SERVICE_URL: http://characterservice:4002
+      CACHE_URL: redis://gateway_cache:6379
+      CACHE_DEFAULT_TTL: 15
     depends_on:
-      - redis
+      - townservice
+      - characterservice
+      - gateway_cache
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # ------------------------------------------------
+  # REDIS CACHE
+  # ------------------------------------------------
+  gateway_cache:
+    image: redis:7
+    container_name: gateway_cache
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+
+  # ------------------------------------------------
+  # TOWN SERVICE + DB + POPULATOR
+  # ------------------------------------------------
+  mongo-town:
+    image: mongo:6
+    container_name: mongo-town
+    restart: unless-stopped
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo-town-data:/data/db
+    networks:
+      - backend
+
+  townservice:
+    image: livia994/townservice:3.0
+    container_name: townservice
+    restart: unless-stopped
+    ports:
+      - "4001:4001"
+    environment:
+      - MONGO_URI=mongodb://mongo-town:27017/townDB
+      - PORT=4001
+      - NODE_ENV=production
+    depends_on:
+      - mongo-town
+      - db_town_populator
+    networks:
+      - backend
+
+  db_town_populator:
+    image: livia994/townservice:3.0
+    container_name: town_db_populator
+    command: ["node", "src/db/seed/town-seed.js"]
+    environment:
+      - MONGO_URI=mongodb://mongo-town:27017/townDB
+    depends_on:
+      - mongo-town
+    networks:
+      - backend
+    restart: "no"
+
+  # ------------------------------------------------
+  # CHARACTER SERVICE + DB + POPULATOR
+  # ------------------------------------------------
+  mongo-character:
+    image: mongo:6
+    container_name: mongo-character
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-character-data:/data/db
+    networks:
+      - backend
+
+  characterservice:
+    image: livia994/characterservice:3.1
+    container_name: characterservice
+    restart: unless-stopped
+    ports:
+      - "4002:4002"
+    environment:
+      - MONGO_URI=mongodb://mongo-character:27017/characterDB
+      - PORT=4002
+      - NODE_ENV=production
+    depends_on:
+      - mongo-character
+      - db_character_populator
+    networks:
+      - backend
+
+  db_character_populator:
+    image: livia994/characterservice:3.1
+    container_name: character_db_populator
+    command: ["node", "src/db/seed/character-seed.js"]
+    environment:
+      - MONGO_URI=mongodb://mongo-character:27017/characterDB
+    depends_on:
+      - mongo-character
+    networks:
+      - backend
+    restart: "no"
+
+# ------------------------------------------------
+# NETWORKS & VOLUMES
+# ------------------------------------------------
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  mongo-town-data:
+  mongo-character-data:
