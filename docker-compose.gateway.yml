@@ -1,9 +1,7 @@
 version: "3.9"
 
 services:
-  # ------------------------------------------------
-  # GATEWAY SERVICE
-  # ------------------------------------------------
+
   gateway_service:
     build: .
     container_name: gateway_service
@@ -22,9 +20,8 @@ services:
       - backend
     restart: unless-stopped
 
-  # ------------------------------------------------
   # REDIS CACHE
-  # ------------------------------------------------
+
   gateway_cache:
     image: redis:7
     container_name: gateway_cache
@@ -34,9 +31,8 @@ services:
     networks:
       - backend
 
-  # ------------------------------------------------
   # TOWN SERVICE + DB + POPULATOR
-  # ------------------------------------------------
+
   mongo-town:
     image: mongo:6
     container_name: mongo-town
@@ -76,9 +72,8 @@ services:
       - backend
     restart: "no"
 
-  # ------------------------------------------------
   # CHARACTER SERVICE + DB + POPULATOR
-  # ------------------------------------------------
+ 
   mongo-character:
     image: mongo:6
     container_name: mongo-character
@@ -91,7 +86,7 @@ services:
       - backend
 
   characterservice:
-    image: livia994/characterservice:3.1
+    image: livia994/characterservice:1.10
     container_name: characterservice
     restart: unless-stopped
     ports:
@@ -107,7 +102,7 @@ services:
       - backend
 
   db_character_populator:
-    image: livia994/characterservice:3.1
+    image: livia994/characterservice:1.10
     container_name: character_db_populator
     command: ["node", "src/db/seed/character-seed.js"]
     environment:
@@ -118,9 +113,9 @@ services:
       - backend
     restart: "no"
 
-# ------------------------------------------------
+
 # NETWORKS & VOLUMES
-# ------------------------------------------------
+
 networks:
   backend:
     driver: bridge
