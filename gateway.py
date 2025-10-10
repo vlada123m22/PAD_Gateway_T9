@@ -13,9 +13,8 @@ import hashlib
 
 app = FastAPI(title="Gateway Service")
 
-# ============================================================
 # CONFIG
-# ============================================================
+
 TASK_SERVICE_URL = os.getenv("TASK_SERVICE_URL", "http://localhost:8180")
 VOTING_SERVICE_URL = os.getenv("VOTING_SERVICE_URL", "http://localhost:8181")
 TOWN_SERVICE_URL = os.getenv("TOWN_SERVICE_URL", "http://townservice:4001")
@@ -29,9 +28,8 @@ MAX_CONCURRENT_TASKS = 10
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 security = HTTPBearer()
 
-# ============================================================
 # REDIS CACHE CONFIG
-# ============================================================
+
 CACHE_URL = os.getenv("CACHE_URL", "redis://localhost:6379")
 CACHE_DEFAULT_TTL = int(os.getenv("CACHE_DEFAULT_TTL", "15"))
 redis_client: Optional[aioredis.Redis] = None
@@ -43,10 +41,10 @@ async def startup():
     try:
         redis_client = aioredis.from_url(CACHE_URL, decode_responses=False)
         await redis_client.ping()
-        print("✅ Redis connected")
+        print("Redis connected")
     except Exception as e:
         redis_client = None
-        print("⚠️ Redis unavailable:", e)
+        print("Redis unavailable:", e)
 
 
 @app.on_event("shutdown")
@@ -55,9 +53,7 @@ async def shutdown():
         await redis_client.close()
 
 
-# ============================================================
 # AUTHENTICATION & ROLE MANAGEMENT
-# ============================================================
 class AuthUser:
     def __init__(self, user_id: str, username: str, roles: list[str],
                  character_id: Optional[str] = None, lobby_id: Optional[str] = None):
@@ -131,9 +127,8 @@ def require_roles(*required_roles: str):
     return role_checker
 
 
-# ============================================================
 # CACHE HELPERS
-# ============================================================
+
 def _cache_key(method: str, full_url: str, headers_raw: list[tuple[bytes, bytes]]) -> str:
     vary = {}
     for h in (b"x-user-id", b"x-user-roles", b"x-character-id"):
@@ -183,9 +178,8 @@ def should_bypass_cache(request: Request) -> bool:
     return False
 
 
-# ============================================================
 # PROXY & CACHE WRAPPERS
-# ============================================================
+
 async def proxy_request(service_url: str, request: Request,
                         user: Optional[AuthUser] = None,
                         additional_headers: Optional[Dict[str, str]] = None) -> Response:
@@ -249,17 +243,13 @@ async def cached_proxy(service_url: str, request: Request,
     return resp
 
 
-# ============================================================
-# HEALTH CHECK
-# ============================================================
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
 
 
-# ============================================================
 # TASK SERVICE
-# ============================================================
+
 @app.post("/api/tasks/assign")
 async def task_assign(request: Request, user: AuthUser = Depends(verify_token)):
     return await proxy_request(f"{TASK_SERVICE_URL}/api/tasks/assign", request, user)
@@ -279,9 +269,8 @@ async def task_complete(task_id: int, character_id: int, request: Request, user:
     return await proxy_request(f"{TASK_SERVICE_URL}/api/tasks/complete/{task_id}/{character_id}", request, user)
 
 
-# ============================================================
 # VOTING SERVICE
-# ============================================================
+#
 @app.get("/api/voting/results/{lobby_id}")
 async def voting_results(lobby_id: int, request: Request, user: AuthUser = Depends(verify_token)):
     return await cached_proxy(f"{VOTING_SERVICE_URL}/api/voting/results/{lobby_id}", request, user, ttl=15)
@@ -292,9 +281,8 @@ async def voting_cast(request: Request, user: AuthUser = Depends(verify_token)):
     return await proxy_request(f"{VOTING_SERVICE_URL}/api/voting/cast", request, user)
 
 
-# ============================================================
 # TOWN SERVICE
-# ============================================================
+
 @app.get("/api/town")
 async def town_list(request: Request, user: AuthUser = Depends(verify_token)):
     return await cached_proxy(f"{TOWN_SERVICE_URL}/api/town", request, user, ttl=15)
@@ -325,9 +313,8 @@ async def toggle_town_phase(lobby_id: int, request: Request, user: AuthUser = De
     return await proxy_request(f"{TOWN_SERVICE_URL}/api/town/phase/{lobby_id}/toggle", request, user)
 
 
-# ============================================================
 # CHARACTER SERVICE
-# ============================================================
+
 @app.get("/api/characters")
 async def get_all_characters(request: Request, user: AuthUser = Depends(verify_token)):
     return await cached_proxy(f"{CHARACTER_SERVICE_URL}/api/characters", request, user, ttl=20)
