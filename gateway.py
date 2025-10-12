@@ -21,6 +21,9 @@ GAME_SERVICE_URL = os.getenv("GAME_SERVICE_URL", "http://game_service:3005")
 TOWN_SERVICE_URL = os.getenv("TOWN_SERVICE_URL", "http://townservice:4001")
 CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://characterservice:4002")
 
+# <-- added Rumors service URL -->
+RUMORS_SERVICE_URL = os.getenv("RUMORS_SERVICE_URL", "http://rumors-service:8081")
+
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
@@ -188,11 +191,16 @@ async def proxy_request(service_url: str, request: Request, user: AuthUser, addi
                     for k, v in request.headers.raw
                     if k.decode().lower() not in ["host", "authorization"]
                 }
+                # standard headers attached by gateway
                 headers["X-User-ID"] = str(user.user_id)
                 headers["X-Username"] = user.username
                 headers["X-User-Roles"] = ",".join(user.roles)
+
+                # attach both X-Character-ID and short 'characterId' for compatibility
                 if user.character_id:
                     headers["X-Character-ID"] = str(user.character_id)
+                    headers["characterId"] = str(user.character_id)
+
                 if additional_headers:
                     headers.update(additional_headers)
                 backend_response = await client.request(
@@ -351,6 +359,32 @@ async def voting_cast(request: Request, user: AuthUser = Depends(verify_token)):
     service_url = f"{VOTING_SERVICE_URL}/api/voting/cast"
     return await proxy_request(service_url, request, user)
 
+# ---------------------- RUMORS SERVICE (NEW) ----------------------
+
+@app.post("/api/rumors/generate")
+async def gateway_generate_rumors(request: Request, user: AuthUser = Depends(verify_token)):
+    """
+    Proxy POST /api/rumors/generate to RumorsService.
+    Gateway attaches X-User-ID, X-Character-ID and also 'characterId' for compatibility.
+    Requires authentication (verify_token).
+    """
+    service_url = f"{RUMORS_SERVICE_URL}/api/rumors/generate"
+    return await proxy_request(service_url, request, user)
+
+@app.get("/api/rumors/{character_id}")
+async def gateway_get_rumors(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    """
+    Cached GET for rumors for a character.
+    """
+    service_url = f"{RUMORS_SERVICE_URL}/api/rumors/{character_id}"
+    return await cached_proxy(service_url, request, user, ttl=CACHE_DEFAULT_TTL)
+
+@app.get("/api/rumors")
+async def gateway_list_rumors(request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{RUMORS_SERVICE_URL}/api/rumors"
+    return await cached_proxy(service_url, request, user, ttl=CACHE_DEFAULT_TTL)
+
+# ---------------------- ADMIN ENDPOINTS (EXAMPLE) ----------------------
 
 # ---------------------- TOWN SERVICE ----------------------
 @app.get("/api/town")
