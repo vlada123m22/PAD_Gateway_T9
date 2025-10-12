@@ -430,3 +430,14 @@ async def get_character_by_id(character_id: str, request: Request, user: AuthUse
 @app.get("/api/admin/stats")
 async def admin_stats(request: Request, user: AuthUser = Depends(require_roles("admin"))):
     return {"message": "Admin stats", "user": user.username, "roles": user.roles}
+
+# ---------------------- ERROR HANDLERS ----------------------
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Custom error handler for better error messages"""
+    return Response(
+        content=f'{{"detail": "{exc.detail}"}}',
+        status_code=exc.status_code,
+        media_type="application/json"
+    )
