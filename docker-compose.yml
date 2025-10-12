@@ -9,7 +9,7 @@ services:
       VOTING_SERVICE_URL: http://voting-service:8181
       GAME_SERVICE_URL: http://game_service:3005
       USER_SERVICE_URL: http://user_service:3000
-      RUMORS_SERVICE_URL: http://rumors-service:8081        # 
+      RUMORS_SERVICE_URL: http://rumors-service:8081        #
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: ${JWT_ALGORITHM}
       TOWN_SERVICE_URL: http://townservice:4001
@@ -243,7 +243,7 @@ services:
     restart: unless-stopped
 
   task-service:
-    image: vladamusin/task_service:0.0.8
+    image: vladamusin/task_service:0.0.11
     container_name: task-service
     ports:
       - "8180:8180"
@@ -401,3 +401,7 @@ volumes:
   postgres-rumors:
   pad_shop-postgres-data:
   pad_roleplay-postgres-data:
+
+#NOTE before running docker-compose up you must run the following command:
+# docker-compose up --scale task-service=3 --scale voting-service=3 --scale game_service=3 --scale user_service=3 --scale rumors-service=3 --scale townservice=3 --scale characterservice=3
+

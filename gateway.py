@@ -45,10 +45,10 @@ async def startup():
     try:
         redis_client = aioredis.from_url(CACHE_URL, decode_responses=False)
         await redis_client.ping()
-        print("✅ Redis cache connected")
+        print("Redis cache connected")
     except Exception as e:
         redis_client = None
-        print("⚠️ Redis not available:", e)
+        print("Redis not available:", e)
 
 
 @app.on_event("shutdown")
