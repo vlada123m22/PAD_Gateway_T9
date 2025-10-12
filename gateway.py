@@ -18,6 +18,8 @@ TASK_SERVICE_URL = os.getenv("TASK_SERVICE_URL", "http://localhost:8180")
 VOTING_SERVICE_URL = os.getenv("VOTING_SERVICE_URL", "http://localhost:8181")
 USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:3000")
 GAME_SERVICE_URL = os.getenv("GAME_SERVICE_URL", "http://game_service:3005")
+TOWN_SERVICE_URL = os.getenv("TOWN_SERVICE_URL", "http://townservice:4001")
+CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://characterservice:4002")
 
 # <-- added Rumors service URL -->
 RUMORS_SERVICE_URL = os.getenv("RUMORS_SERVICE_URL", "http://rumors-service:8081")
@@ -31,11 +33,11 @@ semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 security = HTTPBearer()
 
-
 # ---------------------- CACHE CONFIG ----------------------
 CACHE_URL = os.getenv("CACHE_URL", "redis://localhost:6379")
 CACHE_DEFAULT_TTL = int(os.getenv("CACHE_DEFAULT_TTL", "15"))  # seconds
 redis_client: Optional[aioredis.Redis] = None
+
 
 @app.on_event("startup")
 async def startup():
@@ -43,15 +45,17 @@ async def startup():
     try:
         redis_client = aioredis.from_url(CACHE_URL, decode_responses=False)
         await redis_client.ping()
-        print("Redis cache connected")
+        print("✅ Redis cache connected")
     except Exception as e:
         redis_client = None
-        print("Redis not available:", e)
+        print("⚠️ Redis not available:", e)
+
 
 @app.on_event("shutdown")
 async def shutdown():
     if redis_client:
         await redis_client.close()
+
 
 # ---------------------- CACHE HELPERS ----------------------
 def _cache_key(method: str, full_url: str, headers_raw: list[tuple[bytes, bytes]]) -> str:
@@ -62,6 +66,7 @@ def _cache_key(method: str, full_url: str, headers_raw: list[tuple[bytes, bytes]
                 vary[h.decode()] = v.decode(errors="ignore")
     material = json.dumps({"m": method, "u": full_url, "h": vary}, sort_keys=True).encode()
     return "gw:" + hashlib.sha256(material).hexdigest()
+
 
 async def cache_get(key: str) -> Optional[Response]:
     if not redis_client:
@@ -79,6 +84,7 @@ async def cache_get(key: str) -> Optional[Response]:
         media_type=cached.get("media_type"),
     )
 
+
 async def cache_set(key: str, resp: Response, ttl: int):
     if not redis_client:
         print("[CACHE] No redis_client found.")
@@ -88,7 +94,7 @@ async def cache_set(key: str, resp: Response, ttl: int):
         return
 
     headers = {k: v for k, v in resp.headers.items()
-               if k.lower() not in {"connection","keep-alive","transfer-encoding","te","trailers"}}
+               if k.lower() not in {"connection", "keep-alive", "transfer-encoding", "te", "trailers"}}
     payload = {
         "status": resp.status_code,
         "headers": headers,
@@ -98,12 +104,14 @@ async def cache_set(key: str, resp: Response, ttl: int):
     await redis_client.setex(key, ttl, json.dumps(payload))
     print("[CACHE] Stored:", key)
 
+
 def should_bypass_cache(request: Request) -> bool:
     if "cache-control" in request.headers and "no-cache" in request.headers.get("cache-control", ""):
         return True
     if request.query_params.get("cache") in ("skip", "1", "true"):
         return True
     return False
+
 
 async def cached_proxy(service_url: str, request: Request, user: "AuthUser", ttl: int = CACHE_DEFAULT_TTL) -> Response:
     full_url = service_url
@@ -126,6 +134,7 @@ async def cached_proxy(service_url: str, request: Request, user: "AuthUser", ttl
     resp.headers["X-Cache"] = "MISS"
     return resp
 
+
 # ---------------------- AUTHORIZATION ----------------------
 class AuthUser:
     def __init__(self, user_id: str, username: str, roles: list[str], character_id: Optional[str] = None, lobby_id: Optional[str] = None):
@@ -137,6 +146,7 @@ class AuthUser:
 
 
 dummy_user = AuthUser("public", "public", [])
+
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> AuthUser:
     token = credentials.credentials
@@ -159,15 +169,17 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Authorization failed: {str(e)}")
 
+
 def require_roles(*required_roles: str):
     async def role_checker(user: AuthUser = Depends(verify_token)) -> AuthUser:
         if not any(role in user.roles for role in required_roles):
             raise HTTPException(
-                status_code=403, 
+                status_code=403,
                 detail=f"Access denied. Required roles: {', '.join(required_roles)}"
             )
         return user
     return role_checker
+
 
 # ---------------------- PROXY FUNCTION ----------------------
 async def proxy_request(service_url: str, request: Request, user: AuthUser, additional_headers: Optional[Dict[str, str]] = None) -> Response:
@@ -175,8 +187,8 @@ async def proxy_request(service_url: str, request: Request, user: AuthUser, addi
         try:
             async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
                 headers = {
-                    k.decode(): v.decode() 
-                    for k, v in request.headers.raw 
+                    k.decode(): v.decode()
+                    for k, v in request.headers.raw
                     if k.decode().lower() not in ["host", "authorization"]
                 }
                 # standard headers attached by gateway
@@ -209,10 +221,12 @@ async def proxy_request(service_url: str, request: Request, user: AuthUser, addi
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="Gateway Timeout")
 
+
 # ---------------------- HEALTH CHECK ----------------------
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
 
 # ---------------------- USER SERVICE ----------------------
 @app.post("/api/users")
@@ -234,19 +248,20 @@ async def create_user(request: Request):
             media_type=backend_response.headers.get("content-type"),
         )
 
+
 @app.get("/api/users")
 async def get_users(request: Request):
     """Get all users - cached"""
     service_url = f"{USER_SERVICE_URL}/users"
-    dummy_user = AuthUser("public", "public", [])
     return await cached_proxy(service_url, request, dummy_user, ttl=15)
+
 
 @app.get("/api/users/{user_id}")
 async def get_user(user_id: str, request: Request):
     """Get user by ID - cached"""
     service_url = f"{USER_SERVICE_URL}/users/{user_id}"
-    dummy_user = AuthUser("public", "public", [])
     return await cached_proxy(service_url, request, dummy_user, ttl=15)
+
 
 # ---------------------- GAME SERVICE ----------------------
 @app.post("/api/lobbies")
@@ -267,11 +282,13 @@ async def create_lobby(request: Request):
             media_type=backend_response.headers.get("content-type"),
         )
 
+
 @app.get("/api/lobbies")
 async def get_lobbies(request: Request):
     """Get all lobbies - cached"""
     service_url = f"{GAME_SERVICE_URL}/lobbies"
     return await cached_proxy(service_url, request, dummy_user, ttl=10)
+
 
 @app.post("/api/lobbies/{lobby_id}/join")
 async def join_lobby(lobby_id: str, request: Request):
@@ -293,61 +310,52 @@ async def join_lobby(lobby_id: str, request: Request):
             media_type=backend_response.headers.get("content-type"),
         )
 
+
 @app.get("/api/lobbies/{lobby_id}")
 async def get_lobby(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
     """Get lobby info - cached and authenticated"""
     service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}"
     return await cached_proxy(service_url, request, user, ttl=10)
 
+
 @app.patch("/api/lobbies/{lobby_id}/state")
 async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
     service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/state"
     return await proxy_request(service_url, request, user)
 
-# ---------------------- TASK SERVICE ----------------------
 
+# ---------------------- TASK SERVICE ----------------------
 @app.post("/api/tasks/assign")
 async def task_assign(request: Request, user: AuthUser = Depends(verify_token)):
-    """Assign tasks - requires authentication"""
     service_url = f"{TASK_SERVICE_URL}/api/tasks/assign"
     return await proxy_request(service_url, request, user)
 
+
 @app.get("/api/tasks/view/{character_id}")
 async def task_view(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    """View tasks - requires authentication and ownership verification"""
-    # Optional: Verify user owns this character or has admin role
     if user.character_id != character_id and "admin" not in user.roles:
         raise HTTPException(status_code=403, detail="You can only view your own character's tasks")
-    
     service_url = f"{TASK_SERVICE_URL}/api/tasks/view/{character_id}"
-    return await cached_proxy(service_url, request, dummy_user, ttl=15)
+    return await cached_proxy(service_url, request, user, ttl=15)
+
 
 @app.post("/api/tasks/complete/{task_id}/{character_id}")
-async def task_complete(
-    task_id: int, 
-    character_id: str,
-    request: Request, 
-    user: AuthUser = Depends(verify_token)
-):
-    """Complete task - requires authentication and ownership verification"""
-    # Optional: Verify user owns this character or has admin role
+async def task_complete(task_id: int, character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
     if user.character_id != character_id and "admin" not in user.roles:
         raise HTTPException(status_code=403, detail="You can only complete tasks for your own character")
-    
     service_url = f"{TASK_SERVICE_URL}/api/tasks/complete/{task_id}/{character_id}"
     return await proxy_request(service_url, request, user)
 
-# ---------------------- VOTING SERVICE ----------------------
 
+# ---------------------- VOTING SERVICE ----------------------
 @app.get("/api/voting/results/{lobby_id}")
 async def voting_results(lobby_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    """Get voting results - requires authentication"""
     service_url = f"{VOTING_SERVICE_URL}/api/voting/results/{lobby_id}"
-    return await cached_proxy(service_url, request, dummy_user, ttl=10)
+    return await cached_proxy(service_url, request, user, ttl=10)
+
 
 @app.post("/api/voting/cast")
 async def voting_cast(request: Request, user: AuthUser = Depends(verify_token)):
-    """Cast a vote - requires authentication"""
     service_url = f"{VOTING_SERVICE_URL}/api/voting/cast"
     return await proxy_request(service_url, request, user)
 
@@ -378,11 +386,84 @@ async def gateway_list_rumors(request: Request, user: AuthUser = Depends(verify_
 
 # ---------------------- ADMIN ENDPOINTS (EXAMPLE) ----------------------
 
+# ---------------------- TOWN SERVICE ----------------------
+@app.get("/api/town")
+async def town_list(request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{TOWN_SERVICE_URL}/api/town"
+    return await cached_proxy(service_url, request, user, ttl=15)
+
+
+@app.get("/api/town/lobbies/{lobby_id}/locations/{location_id}/occupants")
+async def town_occupants(lobby_id: int, location_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{TOWN_SERVICE_URL}/api/town/lobbies/{lobby_id}/locations/{location_id}/occupants"
+    return await cached_proxy(service_url, request, user, ttl=10)
+
+
+@app.post("/api/town/move")
+async def town_move(request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{TOWN_SERVICE_URL}/api/town/move"
+    return await proxy_request(service_url, request, user)
+
+
+@app.get("/api/town/movements")
+async def town_movements(request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{TOWN_SERVICE_URL}/api/town/movements"
+    return await cached_proxy(service_url, request, user, ttl=10)
+
+
+@app.get("/api/town/phase/{lobby_id}")
+async def get_town_phase(lobby_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{TOWN_SERVICE_URL}/api/town/phase/{lobby_id}"
+    return await cached_proxy(service_url, request, user, ttl=5)
+
+
+@app.post("/api/town/phase/{lobby_id}/toggle")
+async def toggle_town_phase(lobby_id: int, request: Request, user: AuthUser = Depends(require_roles("admin"))):
+    service_url = f"{TOWN_SERVICE_URL}/api/town/phase/{lobby_id}/toggle"
+    return await proxy_request(service_url, request, user)
+
+
+# ---------------------- CHARACTER SERVICE ----------------------
+@app.get("/api/characters")
+async def get_all_characters(request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{CHARACTER_SERVICE_URL}/api/characters"
+    return await cached_proxy(service_url, request, user, ttl=20)
+
+
+@app.get("/api/characters/user/{user_id}")
+async def get_character_by_user(user_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}"
+    return await cached_proxy(service_url, request, user, ttl=15)
+
+
+@app.patch("/api/characters/user/{user_id}")
+async def update_character(user_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}"
+    return await proxy_request(service_url, request, user)
+
+
+@app.get("/api/characters/user/{user_id}/balance")
+async def get_balance(user_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}/balance"
+    return await cached_proxy(service_url, request, user, ttl=15)
+
+
+@app.post("/api/characters/user/{user_id}/add-gold")
+async def add_gold(user_id: str, request: Request, user: AuthUser = Depends(require_roles("admin"))):
+    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}/add-gold"
+    return await proxy_request(service_url, request, user)
+
+
+@app.get("/api/characters/{character_id}")
+async def get_character_by_id(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/{character_id}"
+    return await cached_proxy(service_url, request, user, ttl=15)
+
+
+# ---------------------- ADMIN ENDPOINT ----------------------
 @app.get("/api/admin/stats")
 async def admin_stats(request: Request, user: AuthUser = Depends(require_roles("admin"))):
-    """Admin-only endpoint - requires admin role"""
-    # This would call an admin service
-    return {"message": "Admin stats", "user": user.username}
+    return {"message": "Admin stats", "user": user.username, "roles": user.roles}
 
 # ---------------------- ERROR HANDLERS ----------------------
 
