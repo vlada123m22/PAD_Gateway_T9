@@ -1,4 +1,26 @@
 services:
+    
+  # HAProxy Load Balancer
+  load-balancer:
+    image: haproxy:2.8-alpine
+    container_name: load-balancer
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - backend
+    depends_on:
+      - task-service
+      - voting-service
+      - user_service
+      - game_service
+      - townservice
+      - characterservice
+      - rumors-service
+    restart: unless-stopped
+    ports:
+      - "8404:8404"  # HAProxy stats page
+    
+    
   gateway:
     build: .
     container_name: gateway_container
@@ -16,16 +38,10 @@ services:
       CHARACTER_SERVICE_URL: http://characterservice:4002
       CACHE_URL: redis://gateway_cache:6379
       CACHE_DEFAULT_TTL: 15
-
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
     depends_on:
-      - task-service
-      - voting-service
-      - game_service
-      - user_service
-      - rumors-service
-      - townservice
-      - characterservice
       - gateway_cache
+      - load-balancer
     networks:
       - backend
 
@@ -242,6 +258,20 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
     restart: unless-stopped
 
+ # Proxy for task-service
+  task-proxy:
+    image: nginx:alpine
+    container_name: task-proxy
+    volumes:
+      - ./nginx-proxy.conf:/etc/nginx/templates/nginx.conf.template:ro
+    environment:
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+    networks:
+      - backend
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
   task-service:
     image: vladamusin/task_service:0.0.11
     container_name: task-service
@@ -256,6 +286,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-task:5432/task_service
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      CHARACTER_SERVICE_URL: http://task-proxy:8000
     restart: unless-stopped
 
 
@@ -401,7 +432,3 @@ volumes:
   postgres-rumors:
   pad_shop-postgres-data:
   pad_roleplay-postgres-data:
-
-#NOTE before running docker-compose up you must run the following command:
-# docker-compose up --scale task-service=3 --scale voting-service=3 --scale game_service=3 --scale user_service=3 --scale rumors-service=3 --scale townservice=3 --scale characterservice=3
-

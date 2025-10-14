@@ -1,3 +1,4 @@
+from fastapi import Header
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -20,12 +21,13 @@ USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:3000")
 GAME_SERVICE_URL = os.getenv("GAME_SERVICE_URL", "http://game_service:3005")
 TOWN_SERVICE_URL = os.getenv("TOWN_SERVICE_URL", "http://townservice:4001")
 CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://characterservice:4002")
-
-# <-- added Rumors service URL -->
 RUMORS_SERVICE_URL = os.getenv("RUMORS_SERVICE_URL", "http://rumors-service:8081")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+
+#For "authenticating" service-to-service requests
+INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "")
 
 BACKEND_TIMEOUT = 5
 MAX_CONCURRENT_TASKS = 10
@@ -55,7 +57,6 @@ async def startup():
 async def shutdown():
     if redis_client:
         await redis_client.close()
-
 
 # ---------------------- CACHE HELPERS ----------------------
 def _cache_key(method: str, full_url: str, headers_raw: list[tuple[bytes, bytes]]) -> str:
@@ -147,6 +148,29 @@ class AuthUser:
 
 dummy_user = AuthUser("public", "public", [])
 
+
+# For "authenticating service-to-service requests"
+async def get_user_or_internal(
+        request: Request,
+        x_internal_token: Optional[str] = Header(None, alias="X-Internal-Service-Token"),
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
+) -> AuthUser:
+    """Get user from JWT token OR allow internal service requests"""
+
+    # Check for internal service token
+    if x_internal_token and INTERNAL_SERVICE_TOKEN and x_internal_token == INTERNAL_SERVICE_TOKEN:
+        return AuthUser(
+            user_id="internal-service",
+            username="internal-service",
+            roles=["service"],
+            character_id=None
+        )
+
+    # Otherwise require JWT
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    return await verify_token(credentials)
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> AuthUser:
     token = credentials.credentials
@@ -333,7 +357,7 @@ async def task_assign(request: Request, user: AuthUser = Depends(verify_token)):
 
 @app.get("/api/tasks/view/{character_id}")
 async def task_view(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    if user.character_id != character_id and "admin" not in user.roles:
+    if user.character_id != character_id and user.roles:
         raise HTTPException(status_code=403, detail="You can only view your own character's tasks")
     service_url = f"{TASK_SERVICE_URL}/api/tasks/view/{character_id}"
     return await cached_proxy(service_url, request, user, ttl=15)
@@ -341,7 +365,7 @@ async def task_view(character_id: str, request: Request, user: AuthUser = Depend
 
 @app.post("/api/tasks/complete/{task_id}/{character_id}")
 async def task_complete(task_id: int, character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    if user.character_id != character_id and "admin" not in user.roles:
+    if user.character_id != character_id and user.roles:
         raise HTTPException(status_code=403, detail="You can only complete tasks for your own character")
     service_url = f"{TASK_SERVICE_URL}/api/tasks/complete/{task_id}/{character_id}"
     return await proxy_request(service_url, request, user)
@@ -449,7 +473,9 @@ async def get_balance(user_id: str, request: Request, user: AuthUser = Depends(v
 
 
 @app.post("/api/characters/user/{user_id}/add-gold")
-async def add_gold(user_id: str, request: Request, user: AuthUser = Depends(require_roles("admin"))):
+async def add_gold(user_id: str, request: Request, user: AuthUser = Depends(get_user_or_internal)):  # CHANGED THIS LINE
+    if not user.roles:
+        raise HTTPException(status_code=403, detail="Cannot add gold. User not authorized")
     service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}/add-gold"
     return await proxy_request(service_url, request, user)
 
