@@ -20,6 +20,7 @@ USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:3000")
 GAME_SERVICE_URL = os.getenv("GAME_SERVICE_URL", "http://game_service:3005")
 TOWN_SERVICE_URL = os.getenv("TOWN_SERVICE_URL", "http://townservice:4001")
 CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://characterservice:4002")
+SHOP_SERVICE_URL = os.getenv("SHOP_SERVICE_URL", "http://shopservice:8085")
 
 # <-- added Rumors service URL -->
 RUMORS_SERVICE_URL = os.getenv("RUMORS_SERVICE_URL", "http://rumors-service:8081")
@@ -459,6 +460,57 @@ async def get_character_by_id(character_id: str, request: Request, user: AuthUse
     service_url = f"{CHARACTER_SERVICE_URL}/api/characters/{character_id}"
     return await cached_proxy(service_url, request, user, ttl=15)
 
+@app.get("/api/character/{character_id}/role")
+async def get_character_role(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/role"
+    return await cached_proxy(service_url, request, user, ttl=10)
+
+@app.get("/api/character/{character_id}/currency")
+async def get_character_currency(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/currency"
+    return await cached_proxy(service_url, request, user, ttl=5)
+
+@app.get("/api/character/{character_id}/inventory")
+async def get_character_inventory(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/inventory"
+    return await cached_proxy(service_url, request, user, ttl=10)
+
+@app.post("/api/character/{character_id}/inventory/add")
+async def add_item_to_inventory(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/inventory/add"
+    return await proxy_request(service_url, request, user)
+
+@app.post("/api/character/{character_id}/inventory/use")
+async def use_inventory_item(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/inventory/use"
+    return await proxy_request(service_url, request, user)
+
+
+# ---------------------- SHOP SERVICE ----------------------
+
+@app.get("/api/shop/items")
+async def get_all_items(request: Request, user: AuthUser = Depends(verify_token)):
+    """Fetch all available shop items."""
+    service_url = f"{SHOP_SERVICE_URL}/shop/items"
+    return await cached_proxy(service_url, request, user, ttl=30)
+
+@app.get("/api/shop/item/{item_id}")
+async def get_item(item_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+    """Fetch one item by ID."""
+    service_url = f"{SHOP_SERVICE_URL}/shop/item/{item_id}"
+    return await cached_proxy(service_url, request, user, ttl=30)
+
+@app.get("/api/shop/player/{character_id}/currency")
+async def get_player_currency(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+    """Fetch player's current currency (calls character service indirectly)."""
+    service_url = f"{SHOP_SERVICE_URL}/shop/player/{character_id}/currency"
+    return await cached_proxy(service_url, request, user, ttl=5)
+
+@app.post("/api/shop/purchase")
+async def purchase_item(request: Request, user: AuthUser = Depends(verify_token)):
+    """Purchase an item — modifies character currency and inventory."""
+    service_url = f"{SHOP_SERVICE_URL}/shop/purchase"
+    return await proxy_request(service_url, request, user)
 
 # ---------------------- ADMIN ENDPOINT ----------------------
 @app.get("/api/admin/stats")
