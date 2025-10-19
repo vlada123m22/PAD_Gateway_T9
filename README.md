@@ -4,17 +4,15 @@
 #### Branches and branches naming conventions
 
 - main - the main branch of the project
-- develop - the development branch, for testing
-- **naming convention for other branches:** `<issue-number>-<issue-name>`
+- **naming convention for other branches:** `[<issue-name><issue-description>]`
 
 #### Pushing
 
-- pushing to develop and other branches: unrestricted
+- pushing to feature branches: unrestricted
 - pushing to main: not allowed
 
 #### Pull requests & Merging strategy:
 
-- A PR needs one approval before being merged
-- Merging strategy: squash and merge, merge commit, rebase
-- No pull requests to main will be approved, until the changes are tested in develop
+- A PR needs one approval before being merged (unless the user who is pushing has bybass permissions)
+- Merging strategy: merge commit
 
