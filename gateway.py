@@ -14,8 +14,8 @@ import hashlib
 import zipfile
 import io
 import subprocess
-from datetime import datetime
 from fastapi.responses import StreamingResponse
+import logging
 
 
 app = FastAPI(title="Gateway Service")
@@ -321,7 +321,7 @@ def get_container_ids_for_service(service_name: str):
         return []
 
 
-@app.get("/api/logs/download")  # Changed from /api/admin/logs/download
+@app.get("/api/logs/download")
 async def download_logs(
     request: Request,
     # Remove user parameter entirely
@@ -481,6 +481,8 @@ Since: {since if since else 'All available logs'}
     )
 
 
+
+
 @app.get("/api/logs/services")  # Changed path
 async def list_log_services(
     request: Request
@@ -550,11 +552,6 @@ async def list_log_services(
             status_code=500,
             detail=f"Failed to list services: {str(e)}"
         )
-
-# ---------------------- HEALTH CHECK ----------------------
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
 
 # ---------------------- USER SERVICE ----------------------
