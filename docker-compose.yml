@@ -24,7 +24,7 @@ services:
 
 
   # =============================
-  # 🔹 ELK Stack + Filebeat setup
+  # ELK Stack + Filebeat setup
   # =============================
 
   elasticsearch:
