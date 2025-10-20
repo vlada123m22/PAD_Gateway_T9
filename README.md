@@ -16,3 +16,4 @@
 - A PR needs one approval before being merged (unless the user who is pushing has bybass permissions)
 - Merging strategy: merge commit
 
+### Create an index in Kibana ```docker-logs*```
