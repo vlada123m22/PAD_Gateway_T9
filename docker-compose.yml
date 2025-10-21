@@ -1,8 +1,7 @@
 services:
-    
-
-
+  # ==================================================
   # HAProxy Load Balancer
+  # ==================================================
   load-balancer:
     image: haproxy:2.8-alpine
     container_name: load-balancer
@@ -20,13 +19,11 @@ services:
       - rumors-service
     restart: unless-stopped
     ports:
-      - "8404:8404"  # HAProxy stats page
+      - "8404:8404" # HAProxy stats page
 
-
-  # =============================
+  # ==================================================
   # ELK Stack + Filebeat setup
-  # =============================
-
+  # ==================================================
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
     container_name: elasticsearch
@@ -60,8 +57,8 @@ services:
     volumes:
       - ./elk/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
     ports:
-      - "5044:5044" # Filebeat input
-      - "9600:9600" # Logstash monitoring API
+      - "5044:5044"
+      - "9600:9600"
     networks:
       - backend
     restart: unless-stopped
@@ -95,6 +92,9 @@ services:
       - backend
     restart: unless-stopped
 
+  # ==================================================
+  # Gateway + Cache
+  # ==================================================
   gateway:
     build: .
     container_name: gateway_container
@@ -107,11 +107,13 @@ services:
       VOTING_SERVICE_URL: http://voting-service:8181
       GAME_SERVICE_URL: http://game_service:3005
       USER_SERVICE_URL: http://user_service:3000
-      RUMORS_SERVICE_URL: http://rumors-service:8081        #
+      RUMORS_SERVICE_URL: http://rumors-service:8081
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: ${JWT_ALGORITHM}
       TOWN_SERVICE_URL: http://townservice:4001
       CHARACTER_SERVICE_URL: http://characterservice:4002
+      SHOP_SERVICE_URL: http://shopservice:80
+      ROLEPLAY_SERVICE_URL: http://roleplayservice:8086
       CACHE_URL: redis://gateway_cache:6379
       CACHE_DEFAULT_TTL: 15
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
@@ -130,6 +132,9 @@ services:
     networks:
       - backend
 
+  # ==================================================
+  # MongoDB Services
+  # ==================================================
   mongo:
     image: mongo:6
     container_name: mongo_container
@@ -139,6 +144,31 @@ services:
     networks:
       - backend
 
+  mongo-town:
+    image: mongo:6
+    container_name: mongo-town
+    restart: unless-stopped
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo-town-data:/data/db
+    networks:
+      - backend
+
+  mongo-character:
+    image: mongo:6
+    container_name: mongo-character
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-character-data:/data/db
+    networks:
+      - backend
+
+  # ==================================================
+  # Microservices (User, Game, Town, Character)
+  # ==================================================
   user_service:
     image: nadea39/user-management-service:1.7
     container_name: user_service_container
@@ -146,7 +176,7 @@ services:
       - MONGO_URI=${MONGO_URI_USER}
       - USE_MOCKS=true
       - PORT=3000
-      - GAME_SERVICE_URL=${GAME_SERVICE_URL} 
+      - GAME_SERVICE_URL=${GAME_SERVICE_URL}
     ports:
       - "3000:3000"
     depends_on:
@@ -171,40 +201,6 @@ services:
     depends_on:
       - mongo
       - user_service
-    networks:
-      - backend
-
-  db_userm_populator:
-    image: nadea39/user-management-service:1.0
-    container_name: db_populator_container
-    environment:
-      - MONGO_URI=mongodb://mongo:27017/user_management
-    depends_on:
-      - mongo
-    command: ["node", "src/populate-db.js"]
-    restart: "no"
-
-  db_game_populator:
-    image: nadea39/gameservice:v1.0.2
-    container_name: game_db_populator
-    environment:
-      - MONGO_URI=mongodb://mongo:27017/gameservice
-    depends_on:
-      - mongo
-    command: ["node", "src/gameServicePopulator.js"]
-    restart: "no"
-    networks:
-      - backend
-
-  # --- all the extra services from main branch ---
-  mongo-town:
-    image: mongo:6
-    container_name: mongo-town
-    restart: unless-stopped
-    ports:
-      - "27019:27017"
-    volumes:
-      - mongo-town-data:/data/db
     networks:
       - backend
 
@@ -236,18 +232,6 @@ services:
       - backend
     restart: "no"
 
-
-  mongo-character:
-    image: mongo:6
-    container_name: mongo-character
-    restart: unless-stopped
-    ports:
-      - "27018:27017"
-    volumes:
-      - mongo-character-data:/data/db
-    networks:
-      - backend
-
   characterservice:
     image: livia994/characterservice:1.10
     container_name: characterservice
@@ -276,6 +260,9 @@ services:
       - backend
     restart: "no"
 
+  # ==================================================
+  # Postgres Databases (Voting, Task, Shop, Roleplay, Rumors)
+  # ==================================================
   postgres-voting:
     container_name: postgres-voting
     image: postgres:15
@@ -318,6 +305,45 @@ services:
       retries: 5
       timeout: 5s
 
+  postgres-shop:
+    image: postgres:15
+    container_name: postgres-shop
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB_SHOP}
+      POSTGRES_USER: ${POSTGRES_USER_SHOP}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_SHOP}
+    volumes:
+      - pad_shop-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - backend
+
+  postgres-rumors:
+    container_name: postgres-rumors
+    image: postgres:15
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: "rumors_service"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-rumors:/var/lib/postgresql/data/pgdata
+    ports:
+      - "5434:5432"
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d rumors_service"]
+      interval: 5s
+      retries: 5
+      timeout: 5s
+
+  # ==================================================
+  # Spring Services
+  # ==================================================
   voting-service:
     image: vladamusin/voting_service:0.0.4
     container_name: voting-service
@@ -334,7 +360,6 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
     restart: unless-stopped
 
- # Proxy for task-service
   task-proxy:
     image: nginx:alpine
     container_name: task-proxy
@@ -365,102 +390,6 @@ services:
       CHARACTER_SERVICE_URL: http://task-proxy:8000
     restart: unless-stopped
 
-
-  postgres-shop:
-    image: postgres:15
-    container_name: postgres-shop
-    restart: always
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB_SHOP}
-      POSTGRES_USER: ${POSTGRES_USER_SHOP}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_SHOP}
-    volumes:
-      - pad_shop-postgres-data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    networks:
-      - backend
-
-  postgres-roleplay:
-    image: postgres:15
-    container_name: postgres-roleplay
-    restart: always
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB_ROLEPLAY}
-      POSTGRES_USER: ${POSTGRES_USER_ROLEPLAY}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_ROLEPLAY}
-    volumes:
-      - pad_roleplay-postgres-data:/var/lib/postgresql/data
-    ports:
-      - "5433:5432"
-    networks:
-      - backend
-
-  shopservice:
-    image: catalinaernu/shopservice:1.0
-    container_name: shopservice
-    restart: always
-    depends_on:
-      - postgres-shop
-    environment:
-      DOTNET_ENVIRONMENT: Development
-      POSTGRES_CONNECTION: "Host=${POSTGRES_HOST_SHOP};Database=${POSTGRES_DB_SHOP};Username=${POSTGRES_USER_SHOP};Password=${POSTGRES_PASSWORD_SHOP}"
-    ports:
-      - "${SHOP_SERVICE_PORT}:80"
-    networks:
-      - backend
-
-  roleplayservice:
-    image: catalinaernu/roleplayservice:1.0
-    container_name: roleplayservice
-    restart: always
-    depends_on:
-      - postgres-roleplay
-    environment:
-      DOTNET_ENVIRONMENT: Development
-      POSTGRES_CONNECTION: "Host=${POSTGRES_HOST_ROLEPLAY};Database=${POSTGRES_DB_ROLEPLAY};Username=${POSTGRES_USER_ROLEPLAY};Password=${POSTGRES_PASSWORD_ROLEPLAY}"
-    ports:
-      - "${ROLEPLAY_SERVICE_PORT}:80"
-    networks:
-      - backend
-
-
-  postgres-rumors:
-    container_name: postgres-rumors
-    image: postgres:15
-    environment:
-      POSTGRES_USER: "${POSTGRES_USER}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
-      POSTGRES_DB: "rumors_service"
-      PGDATA: /var/lib/postgresql/data/pgdata
-    volumes:
-      - postgres-rumors:/var/lib/postgresql/data/pgdata
-    ports:
-      - "5434:5432"
-    networks:
-      - backend
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d rumors_service"]
-      interval: 5s
-      retries: 5
-      timeout: 5s
-
-  communication-service:
-    image: "${COMM_IMAGE}"
-    container_name: communication-service
-    ports:
-      - "${COMM_PORT}:8080"
-    networks:
-      - backend
-    restart: unless-stopped
-    # optional healthcheck to ensure app started (adjust path if you have /actuator/health)
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-
   rumors-service:
     image: "${RUMORS_IMAGE}"
     container_name: rumors-service
@@ -477,6 +406,20 @@ services:
       SPRING_DATASOURCE_PASSWORD: "${POSTGRES_PASSWORD}"
     restart: unless-stopped
 
+  communication-service:
+    image: "${COMM_IMAGE}"
+    container_name: communication-service
+    ports:
+      - "${COMM_PORT}:8080"
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
   pgadmin:
     container_name: pgadmin
@@ -484,15 +427,62 @@ services:
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
-      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_SERVER_MODE: "False"
     ports:
       - "5050:80"
     networks:
       - backend
     restart: unless-stopped
 
+  # ==================================================
+  # SHOP + ROLEPLAY SERVICES
+  # ==================================================
+  shopservice:
+    build:
+      context: ./Shop-Service/src/ShopApi
+      dockerfile: Dockerfile
+    container_name: shopservice
+    restart: always
+    depends_on:
+      - postgres-shop
+      - gateway_cache
+      - characterservice
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:80
+      ConnectionStrings__DefaultConnection: "Host=postgres-shop;Port=5432;Database=${POSTGRES_DB_SHOP};Username=${POSTGRES_USER_SHOP};Password=${POSTGRES_PASSWORD_SHOP}"
+      CHARACTER_SERVICE_URL: http://characterservice:4002
+      REDIS__CONFIG: gateway_cache:6379
+      CACHE_DEFAULT_TTL: 15
+    ports:
+      - "${SHOP_SERVICE_PORT}:80"
+    networks:
+      - backend
 
+  roleplayservice:
+    build:
+      context: ./Roleplay-Service/src/RoleplayApi
+    container_name: roleplayservice
+    restart: always
+    depends_on:
+      - gateway_cache
+      - characterservice
+      - game_service
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8086
+      CharacterServiceUrl: http://characterservice:4002
+      GameServiceUrl: http://game_service:3005
+      Redis__Config: gateway_cache:6379
+      CacheDefaultTtl: 15
+    ports:
+      - "8086:8086"
+    networks:
+      - backend
 
+# ==================================================
+# NETWORKS & VOLUMES
+# ==================================================
 networks:
   backend:
     driver: bridge
@@ -507,8 +497,7 @@ volumes:
   mongo-character-data:
   postgres-voting:
   postgres-task:
-  shop-postgres-data:
-  roleplay-postgres-data:
   postgres-rumors:
   pad_shop-postgres-data:
-  pad_roleplay-postgres-data:
+  shop-postgres-data:
+  roleplay-postgres-data:
