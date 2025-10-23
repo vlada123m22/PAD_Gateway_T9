@@ -20,6 +20,20 @@ import logging
 
 app = FastAPI(title="Gateway Service")
 
+@app.get("/health")
+async def health_check():
+    """
+    Basic health check endpoint for the Gateway service.
+    Returns 200 OK if the service is running.
+    """
+    # Optionally, check connections to dependent services (DB, Redis, etc.)
+    redis_status = "connected" if redis_client else "disconnected"
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "redis": redis_status
+    }
+
 # ---------------------- CONFIG ----------------------
 TASK_SERVICE_URL = os.getenv("TASK_SERVICE_URL", "http://localhost:8180")
 VOTING_SERVICE_URL = os.getenv("VOTING_SERVICE_URL", "http://localhost:8181")

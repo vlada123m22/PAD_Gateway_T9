@@ -438,9 +438,7 @@ services:
   # SHOP + ROLEPLAY SERVICES
   # ==================================================
   shopservice:
-    build:
-      context: ./Shop-Service/src/ShopApi
-      dockerfile: Dockerfile
+    image: catalinaernu/shop-service:latest
     container_name: shopservice
     restart: always
     depends_on:
@@ -454,14 +452,16 @@ services:
       CHARACTER_SERVICE_URL: http://characterservice:4002
       REDIS__CONFIG: gateway_cache:6379
       CACHE_DEFAULT_TTL: 15
+      SERVICE_NAME: shop-service
+      PORT: 80
+      SERVICE_DISCOVERY_URL: http://service_discovery:8500
     ports:
       - "${SHOP_SERVICE_PORT}:80"
     networks:
       - backend
 
   roleplayservice:
-    build:
-      context: ./Roleplay-Service/src/RoleplayApi
+    image: catalinaernu/roleplay-service:latest
     container_name: roleplayservice
     restart: always
     depends_on:
@@ -475,6 +475,9 @@ services:
       GameServiceUrl: http://game_service:3005
       Redis__Config: gateway_cache:6379
       CacheDefaultTtl: 15
+      SERVICE_NAME: roleplay-service
+      PORT: 8086
+      SERVICE_DISCOVERY_URL: http://service_discovery:8500
     ports:
       - "8086:8086"
     networks:
