@@ -1,6 +1,9 @@
 version: '3.8'
 
 services:
+  # =============================
+  # Core Infrastructure Services
+  # =============================
   
   service_discovery:
     image: nadea39/service-discovery:v1.2.0
@@ -25,6 +28,10 @@ services:
     networks:
       - game_network
 
+  # =============================
+  # Load Balancer
+  # =============================
+  
   load-balancer:
     image: haproxy:2.8-alpine
     container_name: load-balancer
@@ -43,6 +50,10 @@ services:
     restart: unless-stopped
     ports:
       - "8404:8404"  # HAProxy stats page
+
+  # =============================
+  # ELK Stack + Filebeat setup
+  # =============================
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
@@ -112,6 +123,10 @@ services:
       - game_network
     restart: unless-stopped
 
+  # =============================
+  # Databases - MongoDB
+  # =============================
+
   mongo:
     image: mongo:6
     container_name: mongo_container
@@ -120,6 +135,10 @@ services:
       - mongo_data:/data/db
     networks:
       - game_network
+
+  # =============================
+  # Databases - PostgreSQL
+  # =============================
 
   postgres-shop:
     image: postgres:15-alpine
@@ -131,6 +150,8 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD_SHOP}
     volumes:
       - postgres_shop_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     networks:
       - game_network
     healthcheck:
@@ -150,6 +171,8 @@ services:
       - PGDATA=/var/lib/postgresql/data/pgdata
     volumes:
       - postgres_rumors_data:/var/lib/postgresql/data/pgdata
+    ports:
+      - "5434:5432"
     networks:
       - game_network
     healthcheck:
@@ -215,6 +238,10 @@ services:
     networks:
       - game_network
 
+  # =============================
+  # Redis Cache
+  # =============================
+
   redis:
     image: redis:7-alpine
     container_name: redis_container
@@ -223,6 +250,10 @@ services:
       - "6379:6379"
     networks:
       - game_network
+
+  # =============================
+  # Core Game Services
+  # =============================
 
   user_service:
     image: nadea39/user-management-service:1.8
@@ -288,6 +319,10 @@ services:
     networks:
       - game_network
 
+  # =============================
+  # Shop & Roleplay Services
+  # =============================
+
   shop_service:
     image: catalinaernu/shop-service:latest
     deploy:
@@ -343,6 +378,10 @@ services:
     networks:
       - game_network
 
+  # =============================
+  # Task & Voting Services
+  # =============================
+
   voting-service:
     image: vladamusin/voting_service:0.0.4
     deploy:
@@ -387,27 +426,28 @@ services:
       CHARACTER_SERVICE_URL: http://task-proxy:8000
     restart: unless-stopped
 
-  #  communication-service:
-#    image: "${COMM_IMAGE}"
-##    container_name: communication-service
-##    ports:
-##      - "${COMM_PORT}:8080"
-#    networks:
-#      - backend
-#    restart: unless-stopped
-#    # optional healthcheck to ensure app started (adjust path if you have /actuator/health)
-#    healthcheck:
-#      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
-#      interval: 10s
-#      timeout: 5s
-#      retries: 6
+  # =============================
+  # Communication & Rumors Services
+  # =============================
 
+  communication-service:
+    image: "${COMM_IMAGE}"
+    deploy:
+      replicas: 2
+    networks:
+      - game_network
+    environment:
+      - SERVICE_DISCOVERY_URL=http://service_discovery:8500
+      - PORT=8080
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
   rumors-service:
     image: "${RUMORS_IMAGE}"
-#    container_name: rumors-service
-#    ports:
-#      - "${RUMORS_PORT}:8081"
     deploy:
       replicas: 2
     depends_on:
@@ -424,8 +464,11 @@ services:
       SERVICE_DISCOVERY_URL: http://service_discovery:8500
       COMMUNICATION_SERVICE_URL: http://communication-service:8080
       PORT: 8081
-    restart: unless-stopped **/
+    restart: unless-stopped
 
+  # =============================
+  # Gateway
+  # =============================
 
   gateway:
     image: nadea39/gateway:v1.0.9
@@ -448,6 +491,10 @@ services:
     networks:
       - game_network
 
+  # =============================
+  # PgAdmin
+  # =============================
+
   pgadmin:
     image: dpage/pgadmin4
     container_name: pgadmin_container
@@ -463,7 +510,9 @@ services:
 
 volumes:
   elasticsearch_data:
+    driver: local
   filebeat_data:
+    driver: local
   mongo_data:
   postgres_shop_data:
   postgres_rumors_data:

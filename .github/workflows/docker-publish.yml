@@ -1,0 +1,63 @@
+name: Docker Publish to Docker Hub
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  IMAGE_NAME: gateway
+  REGISTRY: docker.io
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2. Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      # 3. Log in to Docker Hub
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 4. Determine next version
+      - name: Determine next version
+        id: version
+        run: |
+          # Fetch tags from Docker Hub
+          EXISTING_TAGS=$(curl -s https://hub.docker.com/v2/repositories/${{ secrets.DOCKERHUB_USERNAME }}/gateway/tags/?page_size=100 | jq -r '.results[].name')
+
+          if [ -z "$EXISTING_TAGS" ]; then
+            echo "VERSION=0.0.1" >> $GITHUB_ENV
+          else
+            LATEST=$(echo "$EXISTING_TAGS" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+            if [ -z "$LATEST" ]; then
+              echo "VERSION=0.0.1" >> $GITHUB_ENV
+            else
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST"
+              PATCH=$((PATCH+1))
+              echo "VERSION=$MAJOR.$MINOR.$PATCH" >> $GITHUB_ENV
+            fi
+          fi
+
+          echo "Next version: $VERSION"
+
+      # 5. Build the Docker image
+      - name: Build Docker image
+        run: |
+          docker build -t $REGISTRY/${{ secrets.DOCKERHUB_USERNAME }}/$IMAGE_NAME:$VERSION .
+
+      # 6. Push Docker image
+      - name: Push Docker image
+        run: |
+          docker push $REGISTRY/${{ secrets.DOCKERHUB_USERNAME }}/$IMAGE_NAME:$VERSION
