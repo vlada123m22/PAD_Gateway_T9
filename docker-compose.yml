@@ -43,6 +43,8 @@ services:
       - rumors-service
     restart: unless-stopped
     ports:
+      - "8180:8180"
+      - "8181:8181"
       - "8404:8404"  # HAProxy stats page
 
 
@@ -344,7 +346,7 @@ services:
       timeout: 5s
 
   voting-service:
-    image: vladamusin/voting_service:0.0.4
+    image: vladamusin/voting_service:0.0.7
 #    container_name: voting-service
 #    ports:
 #      - "8181:8181"
@@ -374,7 +376,7 @@ services:
     restart: unless-stopped
 
   task-service:
-    image: vladamusin/task_service:0.0.13
+    image: vladamusin/task_service:0.0.18
 #    container_name: task-service
 #    ports:
 #      - "8180:8180"
