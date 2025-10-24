@@ -49,13 +49,18 @@ services:
       - rumors-service
     restart: unless-stopped
     ports:
+      - "8180:8180"
+      - "8181:8181"
       - "8404:8404"  # HAProxy stats page
 
   # =============================
   # ELK Stack + Filebeat setup
   # =============================
 
-  elasticsearch:
+  
+  
+  
+  :
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
     container_name: elasticsearch
     environment:
@@ -383,9 +388,7 @@ services:
   # =============================
 
   voting-service:
-    image: vladamusin/voting_service:0.0.4
-    deploy:
-      replicas: 2
+    image: vladamusin/voting_service:0.0.7
     depends_on:
       postgres-voting:
         condition: service_healthy
@@ -411,9 +414,7 @@ services:
     restart: unless-stopped
 
   task-service:
-    image: vladamusin/task_service:0.0.13
-    deploy:
-      replicas: 2
+    image: vladamusin/task_service:0.0.18
     depends_on:
       postgres-task:
         condition: service_healthy
@@ -502,8 +503,8 @@ services:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
       PGADMIN_CONFIG_SERVER_MODE: 'False'
-    ports:
-      - "5050:80"
+#    ports:
+#      - "5050:80"
     networks:
       - game_network
     restart: unless-stopped
