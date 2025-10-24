@@ -2,6 +2,7 @@ from fastapi import Header
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from service_registration import register_service, start_heartbeat, setup_graceful_shutdown
 import httpx
 import os
 import asyncio
@@ -27,10 +28,8 @@ USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:3000")
 GAME_SERVICE_URL = os.getenv("GAME_SERVICE_URL", "http://game_service:3005")
 TOWN_SERVICE_URL = os.getenv("TOWN_SERVICE_URL", "http://townservice:4001")
 CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://characterservice:4002")
-
 SHOP_SERVICE_URL = os.getenv("SHOP_SERVICE_URL", "http://shopservice:8085")
 ROLEPLAY_SERVICE_URL = os.getenv("ROLEPLAY_SERVICE_URL", "http://roleplayservice:8086")
-
 RUMORS_SERVICE_URL = os.getenv("RUMORS_SERVICE_URL", "http://rumors-service:8081")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
@@ -52,8 +51,11 @@ redis_client: Optional[aioredis.Redis] = None
 
 
 @app.on_event("startup")
-async def startup():
+async def startup_event():
     global redis_client
+    loop = asyncio.get_event_loop()
+    setup_graceful_shutdown(loop)
+    # Redis setup
     try:
         redis_client = aioredis.from_url(CACHE_URL, decode_responses=False)
         await redis_client.ping()
@@ -61,6 +63,13 @@ async def startup():
     except Exception as e:
         redis_client = None
         print("Redis not available:", e)
+    # Register service
+    success = await register_service()
+    if success:
+        # run heartbeat in background
+        asyncio.create_task(start_heartbeat())
+
+
 
 
 @app.on_event("shutdown")
@@ -184,6 +193,19 @@ async def get_user_or_internal(
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> AuthUser:
     token = credentials.credentials
+    cache_key = f"auth:{token}"
+
+    # 1Try Redis first
+    if redis_client:
+        cached_user = await redis_client.get(cache_key)
+        if cached_user:
+            data = json.loads(cached_user)
+            print("[AUTH CACHE] HIT:", cache_key)
+            return AuthUser(**data)
+        else:
+            print("[AUTH CACHE] MISS:", cache_key)
+
+    # Decode JWT normally
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         exp = payload.get("exp")
@@ -193,9 +215,25 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         username = payload.get("username")
         roles = payload.get("roles", [])
         character_id = payload.get("character_id")
+
         if not user_id or not username:
             raise HTTPException(status_code=401, detail="Invalid token payload")
-        return AuthUser(user_id, username, roles, character_id)
+
+        user_data = {
+            "user_id": user_id,
+            "username": username,
+            "roles": roles,
+            "character_id": character_id,
+        }
+        user = AuthUser(**user_data)
+
+        # Store in Redis (cache token for e.g. 1 hour)
+        if redis_client:
+            await redis_client.setex(cache_key, 3600, json.dumps(user_data))
+            print("[AUTH CACHE] Stored:", cache_key)
+
+        return user
+
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired")
     except jwt.InvalidTokenError:
@@ -255,6 +293,11 @@ async def proxy_request(service_url: str, request: Request, user: AuthUser, addi
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="Gateway Timeout")
 
+# ---------------------- HEALTH CHECK ----------------------
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "gateway"}
+#-----------------------------------------------------------
 
 def get_running_services():
     """
@@ -557,7 +600,6 @@ async def list_log_services(
             detail=f"Failed to list services: {str(e)}"
         )
 
-
 # ---------------------- USER SERVICE ----------------------
 @app.post("/api/users")
 async def create_user(request: Request):
@@ -640,6 +682,15 @@ async def join_lobby(lobby_id: str, request: Request):
             media_type=backend_response.headers.get("content-type"),
         )
 
+@app.post("/api/lobbies/{lobby_id}/start")
+async def start_game(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/start"
+    return await proxy_request(service_url, request, user)
+
+@app.patch("/api/lobbies/{lobby_id}/state")
+async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/state"
+    return await proxy_request(service_url, request, user)
 
 @app.get("/api/lobbies/{lobby_id}")
 async def get_lobby(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
@@ -647,12 +698,85 @@ async def get_lobby(lobby_id: str, request: Request, user: AuthUser = Depends(ve
     service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}"
     return await cached_proxy(service_url, request, user, ttl=10)
 
+@app.get("/api/lobbies/{lobby_id}/character/{character_id}")
+async def get_character(lobby_id: str, character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/character/{character_id}"
+    return await cached_proxy(service_url, request, user, ttl=10)
 
-@app.patch("/api/lobbies/{lobby_id}/state")
-async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/state"
+@app.get("/api/lobbies/{lobby_id}/phase")
+async def get_phase(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/phase"
+    return await cached_proxy(service_url, request, user, ttl=5)
+
+# POST force phase transition
+@app.post("/api/lobbies/{lobby_id}/phase/next")
+async def force_phase(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/phase/next"
     return await proxy_request(service_url, request, user)
 
+@app.post("/api/lobbies/{lobby_id}/announcement")
+async def send_announcement(lobby_id: str, request: Request):
+    """
+    This endpoint does NOT require authentication - it's for service-to-service communication
+    """
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/announcement"
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+            content=await request.body(),
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
+
+@app.get("/api/lobbies/character/{target_id}/role")
+async def get_character_role(target_id: str, request: Request):
+    """
+    Get character's role - for Roleplay Service
+    This endpoint does NOT require authentication - it's for service-to-service communication
+    """
+    service_url = f"{GAME_SERVICE_URL}/lobbies/character/{target_id}/role"
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
+
+@app.post("/api/lobbies/character/{target_id}/status")
+async def update_character_status(target_id: str, request: Request):
+    """
+    Update character's alive/dead status - for Roleplay Service
+    This endpoint does NOT require authentication - it's for service-to-service communication
+    """
+    service_url = f"{GAME_SERVICE_URL}/lobbies/character/{target_id}/status"
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+            content=await request.body(),
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
 
 # ---------------------- TASK SERVICE ----------------------
 @app.post("/api/tasks/assign")
@@ -713,8 +837,6 @@ async def gateway_get_rumors(character_id: str, request: Request, user: AuthUser
 async def gateway_list_rumors(request: Request, user: AuthUser = Depends(verify_token)):
     service_url = f"{RUMORS_SERVICE_URL}/api/rumors"
     return await cached_proxy(service_url, request, user, ttl=CACHE_DEFAULT_TTL)
-
-# ---------------------- ADMIN ENDPOINTS (EXAMPLE) ----------------------
 
 # ---------------------- TOWN SERVICE ----------------------
 @app.get("/api/town")
@@ -815,7 +937,6 @@ async def add_item_to_inventory(character_id: int, request: Request, user: AuthU
 async def use_inventory_item(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
     service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/inventory/use"
     return await proxy_request(service_url, request, user)
-
 
 # ---------------------- SHOP SERVICE ----------------------
 
