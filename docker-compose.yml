@@ -167,7 +167,9 @@ services:
       - backend
 
   user_service:
-    image: nadea39/user-management-service:1.7
+    image: nadea39/user-management-service:1.8
+    deploy:
+      replicas: 2
 #    container_name: user_service_container
     environment:
       - MONGO_URI=${MONGO_URI_USER}
@@ -184,7 +186,9 @@ services:
       - .env
 
   game_service:
-    image: nadea39/gameservice:v1.0.5
+    image: nadea39/gameservice:v1.0.7
+    deploy:
+      replicas: 2
 #    container_name: gameservice_container
     environment:
       - MONGO_URI=${MONGO_URI_GAME}
@@ -236,7 +240,9 @@ services:
       - backend
 
   townservice:
-    image: livia994/townservice:3.0
+    image: livia994/townservice:latest
+    deploy:
+      replicas: 2
 #    container_name: townservice
     restart: unless-stopped
 #    ports:
@@ -276,7 +282,9 @@ services:
       - backend
 
   characterservice:
-    image: livia994/characterservice:1.10
+    image: livia994/characterservice:latest
+    deploy:
+      replicas: 2
 #    container_name: characterservice
     restart: unless-stopped
 #    ports:
@@ -347,6 +355,8 @@ services:
 
   voting-service:
     image: vladamusin/voting_service:0.0.7
+    deploy:
+      replicas: 2
 #    container_name: voting-service
 #    ports:
 #      - "8181:8181"
@@ -377,6 +387,8 @@ services:
 
   task-service:
     image: vladamusin/task_service:0.0.18
+    deploy:
+      replicas: 2
 #    container_name: task-service
 #    ports:
 #      - "8180:8180"
@@ -393,63 +405,63 @@ services:
     restart: unless-stopped
 
 
-  postgres-shop:
-    image: postgres:15
-    container_name: postgres-shop
-    restart: always
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB_SHOP}
-      POSTGRES_USER: ${POSTGRES_USER_SHOP}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_SHOP}
-    volumes:
-      - pad_shop-postgres-data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    networks:
-      - backend
+ # postgres-shop:
+ #   image: postgres:15
+ #   container_name: postgres-shop
+ #   restart: always
+ #   environment:
+ #     POSTGRES_DB: ${POSTGRES_DB_SHOP}
+ #     POSTGRES_USER: ${POSTGRES_USER_SHOP}
+ #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_SHOP}
+ #   volumes:
+ #     - pad_shop-postgres-data:/var/lib/postgresql/data
+ #   ports:
+ #     - "5432:5432"
+ #   networks:
+ #     - backend
 
-  postgres-roleplay:
-    image: postgres:15
-#    container_name: postgres-roleplay
-    restart: always
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB_ROLEPLAY}
-      POSTGRES_USER: ${POSTGRES_USER_ROLEPLAY}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_ROLEPLAY}
-    volumes:
-      - pad_roleplay-postgres-data:/var/lib/postgresql/data
-#    ports:
-#      - "5433:5432"
-    networks:
-      - backend
+#  postgres-roleplay:
+#    image: postgres:15
+##    container_name: postgres-roleplay
+#    restart: always
+#    environment:
+#      POSTGRES_DB: ${POSTGRES_DB_ROLEPLAY}
+#      POSTGRES_USER: ${POSTGRES_USER_ROLEPLAY}
+#      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_ROLEPLAY}
+#    volumes:
+#      - pad_roleplay-postgres-data:/var/lib/postgresql/data
+##    ports:
+##      - "5433:5432"
+#    networks:
+#      - backend
 
-#   shopservice:
-#     image: catalinaernu/shopservice:1.0
-# #    container_name: shopservice
-#     restart: always
-#     depends_on:
-#       - postgres-shop
-#     environment:
-#       DOTNET_ENVIRONMENT: Development
-#       POSTGRES_CONNECTION: "Host=${POSTGRES_HOST_SHOP};Database=${POSTGRES_DB_SHOP};Username=${POSTGRES_USER_SHOP};Password=${POSTGRES_PASSWORD_SHOP}"
-# #    ports:
-# #      - "${SHOP_SERVICE_PORT}:80"
-#     networks:
-#       - backend
+  #shopservice:
+  #  image: catalinaernu/shopservice:1.0
+# #   container_name: shopservice
+  #  restart: always
+  #  depends_on:
+  #    - postgres-shop
+  #  environment:
+  #    DOTNET_ENVIRONMENT: Development
+  #    POSTGRES_CONNECTION: "Host=${POSTGRES_HOST_SHOP};Database=${POSTGRES_DB_SHOP};Username=${POSTGRES_USER_SHOP};Password=${POSTGRES_PASSWORD_SHOP}"
+# #   ports:
+# #     - "${SHOP_SERVICE_PORT}:80"
+  #  networks:
+  #    - backend
 
-#   roleplayservice:
-#     image: catalinaernu/roleplayservice:1.0
-# #    container_name: roleplayservice
-#     restart: always
-#     depends_on:
-#       - postgres-roleplay
-#     environment:
-#       DOTNET_ENVIRONMENT: Development
-#       POSTGRES_CONNECTION: "Host=${POSTGRES_HOST_ROLEPLAY};Database=${POSTGRES_DB_ROLEPLAY};Username=${POSTGRES_USER_ROLEPLAY};Password=${POSTGRES_PASSWORD_ROLEPLAY}"
-# #    ports:
-# #      - "${ROLEPLAY_SERVICE_PORT}:80"
-#     networks:
-#       - backend
+#  roleplayservice:
+#    image: catalinaernu/roleplayservice:1.0
+##    container_name: roleplayservice
+#    restart: always
+#    depends_on:
+#      - postgres-roleplay
+#    environment:
+#      DOTNET_ENVIRONMENT: Development
+#      POSTGRES_CONNECTION: "Host=${POSTGRES_HOST_ROLEPLAY};Database=${POSTGRES_DB_ROLEPLAY};Username=${POSTGRES_USER_ROLEPLAY};Password=${POSTGRES_PASSWORD_ROLEPLAY}"
+##    ports:
+##      - "${ROLEPLAY_SERVICE_PORT}:80"
+#    networks:
+#      - backend
 
 
   postgres-rumors:
@@ -489,7 +501,9 @@ services:
 #      retries: 6
 
   rumors-service:
-    image: "${RUMORS_IMAGE}"
+    image: drumdrum652/rumors-service:8.0
+    deploy:
+      replicas: 2
 #    container_name: rumors-service
 #    ports:
 #      - "${RUMORS_PORT}:8081"
