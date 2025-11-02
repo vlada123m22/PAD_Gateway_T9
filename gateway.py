@@ -818,53 +818,53 @@ async def use_inventory_item(character_id: int, request: Request, user: AuthUser
 # ---------------------- SHOP SERVICE ----------------------
 
 @app.get("/api/shop/items")
-async def get_all_items(request: Request, user: AuthUser = Depends(verify_token)):
+async def get_all_items(request: Request):
     """Fetch all available shop items."""
     service_url = f"{SHOP_SERVICE_URL}/shop/items"
-    return await cached_proxy(service_url, request, user, ttl=30)
+    return await cached_proxy(service_url, request, ttl=30)
 
 
 @app.get("/api/shop/items/{item_id}")
-async def get_item(item_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+async def get_item(item_id: int, request: Request):
     """Fetch one item by ID."""
     service_url = f"{SHOP_SERVICE_URL}/shop/items/{item_id}"
-    return await cached_proxy(service_url, request, user, ttl=30)
+    return await cached_proxy(service_url, request, ttl=30)
 
 
 @app.get("/api/shop/character/{character_id}/currency")
-async def get_character_currency(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+async def get_character_currency(character_id: int, request: Request):
     """Fetch character's current currency (via Character Service)."""
     service_url = f"{SHOP_SERVICE_URL}/shop/character/{character_id}/currency"
-    return await cached_proxy(service_url, request, user, ttl=5)
+    return await cached_proxy(service_url, request, ttl=5)
 
 
 @app.post("/api/shop/purchase")
-async def purchase_item(request: Request, user: AuthUser = Depends(verify_token)):
+async def purchase_item(request: Request):
     """Purchase an item — modifies character currency and inventory."""
     service_url = f"{SHOP_SERVICE_URL}/shop/purchase"
-    return await proxy_request(service_url, request, user)
+    return await proxy_request(service_url, request)
 
 # ---------------------- ROLEPLAY SERVICE ----------------------
 
 @app.post("/api/roleplay/perform")
-async def perform_ability(request: Request, user: AuthUser = Depends(verify_token)):
+async def perform_ability(request: Request):
     """
     Proxy POST /roleplay/perform to RoleplayService.
     Example: POST http://localhost:8086/roleplay/perform?role_id=1
     Body: { "Character_Id": 123, "Target_Id": 456 }
     """
     service_url = f"{ROLEPLAY_SERVICE_URL}/roleplay/perform"
-    return await proxy_request(service_url, request, user)
+    return await proxy_request(service_url, request)
 
 
 @app.get("/api/roleplay/character/{character_id}/status")
-async def get_character_status(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+async def get_character_status(character_id: int, request: Request):
     """
     Proxy GET /roleplay/character/{character_id}/status to RoleplayService.
     Example: GET http://localhost:8086/roleplay/character/123/status
     """
     service_url = f"{ROLEPLAY_SERVICE_URL}/roleplay/character/{character_id}/status"
-    return await cached_proxy(service_url, request, user, ttl=5)
+    return await cached_proxy(service_url, request, ttl=5)
 
 # ---------------------- ADMIN ENDPOINT ----------------------
 @app.get("/api/admin/stats")
