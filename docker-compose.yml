@@ -423,9 +423,9 @@ services:
 
   shopservice:
     image: catalinaernu/shop-service:latest
-    container_name: shopservice
-    ports:
-      - "8085:8085"
+    #container_name: shopservice
+    #ports:
+    #  - "8085:8085"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://0.0.0.0:8085
@@ -433,7 +433,7 @@ services:
       - Redis__Configuration=gateway_cache:6379
       - SERVICE_DISCOVERY_URL=http://service_discovery_container:8500
       - SERVICE_NAME=shop-service
-      - PORT=8085
+    #  - PORT=8085
     depends_on:
       postgres-shop:
         condition: service_healthy
@@ -450,7 +450,7 @@ services:
 
   roleplayservice:
     image: catalinaernu/roleplay-service:latest
-    container_name: roleplayservice
+    #  container_name: roleplayservice
     depends_on:
       gateway_cache:
         condition: service_started
@@ -462,10 +462,10 @@ services:
       Redis__Config: gateway_cache:6379
       CacheDefaultTtl: 15
       SERVICE_NAME: roleplay-service
-      PORT: 8086
+      #  PORT: 8086
       SERVICE_DISCOVERY_URL: http://service_discovery:8500
-    ports:
-      - "8086:8086"
+    #ports:
+    #  - "8086:8086"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8086/health || exit 1"]
       interval: 10s
