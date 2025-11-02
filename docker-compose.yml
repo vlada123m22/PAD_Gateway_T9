@@ -409,7 +409,7 @@ services:
       POSTGRES_PASSWORD: shoppass
       POSTGRES_DB: shop_service
     volumes:
-      - shop-postgres-data:/var/lib/postgresql/data # updated to match declared volume
+      - shop-postgres-data:/var/lib/postgresql/data
     ports:
       - "5433:5432"
     healthcheck:
@@ -423,37 +423,34 @@ services:
 
   shopservice:
     image: catalinaernu/shop-service:latest
-    #container_name: shopservice
-    deploy:
-      replicas: 2
-    #ports:
-    #  - "8085:8085"
+    container_name: shopservice
+    ports:
+      - "8085:8085"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://0.0.0.0:8085
+      - ConnectionStrings__DefaultConnection=Host=postgres-shop;Port=5432;Database=shop_service;Username=shopuser;Password=shoppass
+      - Redis__Configuration=gateway_cache:6379
+      - SERVICE_DISCOVERY_URL=http://service_discovery_container:8500
+      - SERVICE_NAME=shop-service
+      - PORT=8085
     depends_on:
       postgres-shop:
         condition: service_healthy
       service_discovery:
         condition: service_healthy
-    environment:
-      ASPNETCORE_URLS: http://+:8085
-      CONNECTION_STRING: Host=postgres-shop;Database=shop_service;Username=shopuser;Password=shoppass
-      SERVICE_DISCOVERY_URL: http://service_discovery:8500
-      SERVICE_NAME: shop-service
-      #PORT: 8085
-    volumes:
-      - shop-postgres-data:/var/lib/postgresql/data # updated
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 8085 || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8085/health || exit 1"]
       interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 5s
+      start_period: 90s
     networks:
       - backend
 
   roleplayservice:
     image: catalinaernu/roleplay-service:latest
-    #container_name: roleplayservice
-    deploy:
-      replicas: 2
+    container_name: roleplayservice
     depends_on:
       gateway_cache:
         condition: service_started
@@ -465,7 +462,7 @@ services:
       Redis__Config: gateway_cache:6379
       CacheDefaultTtl: 15
       SERVICE_NAME: roleplay-service
-      #PORT: 8086
+      PORT: 8086
       SERVICE_DISCOVERY_URL: http://service_discovery:8500
     ports:
       - "8086:8086"
