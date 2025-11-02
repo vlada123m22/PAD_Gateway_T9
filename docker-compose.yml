@@ -437,8 +437,6 @@ services:
     depends_on:
       postgres-shop:
         condition: service_healthy
-      service_discovery:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8085/health || exit 1"]
       interval: 10s
@@ -454,8 +452,6 @@ services:
     depends_on:
       gateway_cache:
         condition: service_started
-      service_discovery:
-        condition: service_healthy
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8086
