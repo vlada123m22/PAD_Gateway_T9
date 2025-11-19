@@ -42,7 +42,56 @@ services:
     ports:
       - "8180:8180"
       - "8181:8181"
-      - "8404:8404" # HAProxy stats page
+      - "8404:8404"
+
+  # =============================
+  # SHARDED REDIS CACHE CLUSTER
+  # =============================
+
+  gateway_cache_1:
+    image: redis:7-alpine
+    container_name: gateway_cache_1
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gateway_cache_2:
+    image: redis:7-alpine
+    container_name: gateway_cache_2
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6380:6379"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gateway_cache_3:
+    image: redis:7-alpine
+    container_name: gateway_cache_3
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6381:6379"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   # =============================
   # ELK Stack + Filebeat setup
@@ -81,8 +130,8 @@ services:
     volumes:
       - ./elk/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
     ports:
-      - "5044:5044" # Filebeat input
-      - "9600:9600" # Logstash monitoring API
+      - "5044:5044"
+      - "9600:9600"
     networks:
       - backend
     restart: unless-stopped
@@ -116,13 +165,16 @@ services:
       - backend
     restart: unless-stopped
 
+  # =============================
+  # GATEWAY SERVICE (Updated for sharding)
+  # =============================
+
   gateway:
     build: .
     container_name: gateway_container
     ports:
       - "8000:8000"
     volumes:
-      # For Windows - use npipe
       - //./pipe/docker_engine://./pipe/docker_engine
     environment:
       DOCKER_HOST: "npipe:////./pipe/docker_engine"
@@ -137,23 +189,27 @@ services:
       JWT_ALGORITHM: ${JWT_ALGORITHM}
       TOWN_SERVICE_URL: http://townservice:4001
       CHARACTER_SERVICE_URL: http://characterservice:4002
-      CACHE_URL: redis://gateway_cache:6379
+      # Sharded cache configuration
+      CACHE_SHARD_URLS: redis://gateway_cache_1:6379,redis://gateway_cache_2:6379,redis://gateway_cache_3:6379
       CACHE_DEFAULT_TTL: 15
+      VIRTUAL_NODES: 150
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
     depends_on:
-      - gateway_cache
-      - load-balancer
+      gateway_cache_1:
+        condition: service_healthy
+      gateway_cache_2:
+        condition: service_healthy
+      gateway_cache_3:
+        condition: service_healthy
+      load-balancer:
+        condition: service_started
     networks:
       - backend
-
-  gateway_cache:
-    image: redis:7
-    container_name: gateway_cache
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    networks:
-      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/cache/stats"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   mongo:
     image: mongo:6
@@ -168,14 +224,11 @@ services:
     image: nadea39/user-management-service:1.8
     deploy:
       replicas: 2
-    #    container_name: user_service_container
     environment:
       - MONGO_URI=${MONGO_URI_USER}
       - USE_MOCKS=true
       - PORT=3000
       - GAME_SERVICE_URL=${GAME_SERVICE_URL}
-    #    ports:
-    #      - "3000:3000"
     depends_on:
       - mongo
     networks:
@@ -187,7 +240,6 @@ services:
     image: nadea39/gameservice:v1.0.7
     deploy:
       replicas: 2
-    #    container_name: gameservice_container
     environment:
       - MONGO_URI=${MONGO_URI_GAME}
       - PORT=${PORT}
@@ -195,8 +247,6 @@ services:
       - USER_SERVICE_URL=${USER_SERVICE_URL}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_ALGORITHM=${JWT_ALGORITHM}
-    #    ports:
-    #      - "3005:3005"
     depends_on:
       - mongo
       - user_service
@@ -225,7 +275,6 @@ services:
     networks:
       - backend
 
-  # --- all the extra services from main branch ---
   mongo-town:
     image: mongo:6
     container_name: mongo-town
@@ -241,10 +290,7 @@ services:
     image: livia994/townservice:latest
     deploy:
       replicas: 2
-    #    container_name: townservice
     restart: unless-stopped
-    #    ports:
-    #      - "4001:4001"
     environment:
       - MONGO_URI=mongodb://mongo-town:27017/townDB
       - PORT=4001
@@ -282,10 +328,7 @@ services:
     image: livia994/characterservice:latest
     deploy:
       replicas: 2
-    #    container_name: characterservice
     restart: unless-stopped
-    #    ports:
-    #      - "4002:4002"
     environment:
       - MONGO_URI=mongodb://mongo-character:27017/characterDB
       - PORT=4002
@@ -354,9 +397,6 @@ services:
     image: vladamusin/voting_service:0.0.7
     deploy:
       replicas: 2
-    #    container_name: voting-service
-    #    ports:
-    #      - "8181:8181"
     depends_on:
       postgres-voting:
         condition: service_healthy
@@ -368,7 +408,6 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
     restart: unless-stopped
 
-  # Proxy for task-service
   task-proxy:
     image: nginx:alpine
     container_name: task-proxy
@@ -386,9 +425,6 @@ services:
     image: vladamusin/task_service:0.0.18
     deploy:
       replicas: 2
-    #    container_name: task-service
-    #    ports:
-    #      - "8180:8180"
     depends_on:
       postgres-task:
         condition: service_healthy
@@ -409,7 +445,7 @@ services:
       POSTGRES_PASSWORD: shoppass
       POSTGRES_DB: shop_service
     volumes:
-      - shop-postgres-data:/var/lib/postgresql/data # updated to match declared volume
+      - shop-postgres-data:/var/lib/postgresql/data
     ports:
       - "5433:5432"
     healthcheck:
@@ -423,11 +459,8 @@ services:
 
   shopservice:
     image: catalinaernu/shop-service:latest
-    #container_name: shopservice
     deploy:
       replicas: 2
-    #ports:
-    #  - "8085:8085"
     depends_on:
       postgres-shop:
         condition: service_healthy
@@ -438,9 +471,8 @@ services:
       CONNECTION_STRING: Host=postgres-shop;Database=shop_service;Username=shopuser;Password=shoppass
       SERVICE_DISCOVERY_URL: http://service_discovery:8500
       SERVICE_NAME: shop-service
-      #PORT: 8085
     volumes:
-      - shop-postgres-data:/var/lib/postgresql/data # updated
+      - shop-postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 8085 || exit 1"]
       interval: 10s
@@ -451,21 +483,19 @@ services:
 
   roleplayservice:
     image: catalinaernu/roleplay-service:latest
-    #container_name: roleplayservice
     deploy:
       replicas: 2
     depends_on:
-      gateway_cache:
-        condition: service_started
+      gateway_cache_1:
+        condition: service_healthy
       service_discovery:
         condition: service_healthy
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8086
-      Redis__Config: gateway_cache:6379
+      Redis__Config: gateway_cache_1:6379
       CacheDefaultTtl: 15
       SERVICE_NAME: roleplay-service
-      #PORT: 8086
       SERVICE_DISCOVERY_URL: http://service_discovery:8500
     ports:
       - "8086:8086"
@@ -498,28 +528,10 @@ services:
       retries: 5
       timeout: 5s
 
-  #  communication-service:
-  #    image: "${COMM_IMAGE}"
-  ##    container_name: communication-service
-  ##    ports:
-  ##      - "${COMM_PORT}:8080"
-  #    networks:
-  #      - backend
-  #    restart: unless-stopped
-  #    # optional healthcheck to ensure app started (adjust path if you have /actuator/health)
-  #    healthcheck:
-  #      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
-  #      interval: 10s
-  #      timeout: 5s
-  #      retries: 6
-
   rumors-service:
     image: drumdrum652/rumors-service:8.0
     deploy:
       replicas: 2
-    #    container_name: rumors-service
-    #    ports:
-    #      - "${RUMORS_PORT}:8081"
     depends_on:
       postgres-rumors:
         condition: service_healthy
@@ -532,14 +544,11 @@ services:
     restart: unless-stopped
 
   pgadmin:
-    #    container_name: pgadmin
     image: dpage/pgadmin4
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
       PGADMIN_CONFIG_SERVER_MODE: "False"
-    #    ports:
-    #      - "5050:80"
     networks:
       - backend
     restart: unless-stopped
