@@ -475,70 +475,70 @@ services:
   # POSTGRESQL WITH REPLICATION - SHOP
   # =============================
 
- # postgres-shop-primary:
- #   image: postgres:15
- #   container_name: postgres-shop-primary
- #   environment:
- #     POSTGRES_USER: shopuser
- #     POSTGRES_PASSWORD: shoppass
- #     POSTGRES_DB: shop_service
- #     POSTGRES_REPLICATION_USER: replicator
- #     POSTGRES_REPLICATION_PASSWORD: shoppass
- #   command: |
- #     postgres
- #     -c wal_level=replica
- #     -c max_wal_senders=3
- #     -c max_replication_slots=3
- #     -c hot_standby=on
- #   volumes:
- #     - postgres_shop_primary:/var/lib/postgresql/data
- #     - ./postgres-init/shop-primary.sh:/docker-entrypoint-initdb.d/init.sh
- #   networks:
- #     - backend
- #   restart: unless-stopped
- #   healthcheck:
- #     test: [ "CMD-SHELL", "pg_isready -U shopuser" ]
- #     interval: 5s
- #     retries: 5
+  postgres-shop-primary:
+    image: postgres:15
+    container_name: postgres-shop-primary
+    environment:
+      POSTGRES_USER: shopuser
+      POSTGRES_PASSWORD: shoppass
+      POSTGRES_DB: shop_service
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: shoppass
+    command: |
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=3
+      -c max_replication_slots=3
+      -c hot_standby=on
+    volumes:
+      - postgres_shop_primary:/var/lib/postgresql/data
+      - ./postgres-init/shop-primary.sh:/docker-entrypoint-initdb.d/init.sh
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U shopuser" ]
+      interval: 5s
+      retries: 5
 #
- # postgres-shop-replica:
- #   image: postgres:15
- #   container_name: postgres-shop-replica
- #   environment:
- #     POSTGRES_USER: shopuser
- #     POSTGRES_PASSWORD: shoppass
- #     PGUSER: shopuser
- #     PGPASSWORD: shoppass
- #   command: |
- #     bash -c "
- #     until pg_basebackup -h postgres-shop-primary -D /var/lib/postgresql/data -U replicator -w -P -R; do
- #       echo 'Waiting for primary to be ready...'
- #       sleep 5
- #     done
- #     postgres -c hot_standby=on
- #     "
- #   volumes:
- #     - postgres_shop_replica:/var/lib/postgresql/data
- #   depends_on:
- #     postgres-shop-primary:
- #       condition: service_healthy
- #   networks:
- #     - backend
- #   restart: unless-stopped
+  postgres-shop-replica:
+    image: postgres:15
+    container_name: postgres-shop-replica
+    environment:
+      POSTGRES_USER: shopuser
+      POSTGRES_PASSWORD: shoppass
+      PGUSER: shopuser
+      PGPASSWORD: shoppass
+    command: |
+      bash -c "
+      until pg_basebackup -h postgres-shop-primary -D /var/lib/postgresql/data -U replicator -w -P -R; do
+        echo 'Waiting for primary to be ready...'
+        sleep 5
+      done
+      postgres -c hot_standby=on
+      "
+    volumes:
+      - postgres_shop_replica:/var/lib/postgresql/data
+    depends_on:
+      postgres-shop-primary:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
 #
-  #postgres-shop-proxy:
-  #  image: haproxy:2.8-alpine
-  #  container_name: postgres-shop-proxy
-  #  volumes:
-  #    - ./haproxy-postgres-shop.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-  #  ports:
-  #    - "5433:5432"
-  #  networks:
-  #    - backend
-  #  depends_on:
-  #    - postgres-shop-primary
-  #    - postgres-shop-replica
-  #  restart: unless-stopped
+  postgres-shop-proxy:
+    image: haproxy:2.8-alpine
+    container_name: postgres-shop-proxy
+    volumes:
+      - ./haproxy-postgres-shop.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "5433:5432"
+    networks:
+      - backend
+    depends_on:
+      - postgres-shop-primary
+      - postgres-shop-replica
+    restart: unless-stopped
 #
   # =============================
   # POSTGRESQL WITH REPLICATION - RUMORS
@@ -724,25 +724,25 @@ services:
       CHARACTER_SERVICE_URL: http://task-proxy:8000
     restart: unless-stopped
 
-  #shopservice:
-  #  image: catalinaernu/shop-service:latest
-  #  deploy:
-  #    replicas: 1
-  #  depends_on:
-  #    - postgres-shop-proxy
-  #  environment:
-  #    ASPNETCORE_URLS: http://+:8085
-  #    # Connect through PostgreSQL proxy
-  #    CONNECTION_STRING: Host=postgres-shop-proxy;Database=shop_service;Username=shopuser;Password=shoppass
-  #    SERVICE_DISCOVERY_URL: http://service_discovery:8500
-  #    SERVICE_NAME: shop-service
-  #  healthcheck:
-  #    test: [ "CMD-SHELL", "nc -z localhost 8085 || exit 1" ]
-  #    interval: 10s
-  #    retries: 5
-  #    start_period: 5s
-  #  networks:
-  #    - backend
+  shopservice:
+    image: catalinaernu/shop-service:latest
+    deploy:
+      replicas: 1
+    depends_on:
+      - postgres-shop-proxy
+    environment:
+      ASPNETCORE_URLS: http://+:8085
+      # Connect through PostgreSQL proxy
+      CONNECTION_STRING: Host=postgres-shop-proxy;Database=shop_service;Username=shopuser;Password=shoppass
+      SERVICE_DISCOVERY_URL: http://service_discovery:8500
+      SERVICE_NAME: shop-service
+    healthcheck:
+      test: [ "CMD-SHELL", "nc -z localhost 8085 || exit 1" ]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    networks:
+      - backend
 
   roleplayservice:
     image: catalinaernu/roleplay-service:latest
@@ -783,15 +783,193 @@ services:
       SPRING_DATASOURCE_PASSWORD: "${POSTGRES_PASSWORD}"
     restart: unless-stopped
 
+
+  # =============================
+  # DATA WAREHOUSE - PostgreSQL
+  # =============================
+#
+  postgres-warehouse:
+    image: postgres:15
+    container_name: postgres-warehouse
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: data_warehouse
+      PGDATA: /data/postgres
+    volumes:
+      - postgres_warehouse:/data/postgres
+      - ./warehouse-init:/docker-entrypoint-initdb.d
+    ports:
+      - "5445:5432"
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER}" ]
+      interval: 5s
+      retries: 5
+      timeout: 5s
+#
+  # =============================
+  # ETL SERVICE (Apache Airflow)
+  # =============================
+#
+  airflow-postgres:
+    image: postgres:15
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_postgres:/var/lib/postgresql/data
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U airflow" ]
+      interval: 5s
+      retries: 5
+#
+  airflow-init:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: airflow-init
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-'81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs='}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+    networks:
+      - backend
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com \
+          --password admin
+    restart: "no"
+#
+  airflow-webserver:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: airflow-webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres-warehouse:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-'81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs='}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-'your-secret-key-here'}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/requirements.txt:/requirements.txt
+    ports:
+      - "8080:8080"
+    networks:
+      - backend
+    restart: unless-stopped
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        pip install --no-cache-dir -r /requirements.txt
+        exec airflow webserver
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+#
+  airflow-scheduler:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: airflow-scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-'81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs='}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+#
+      # Connection strings for source databases
+      MONGO_PRIMARY_URI: mongodb://mongo-proxy:27017
+      MONGO_TOWN_URI: mongodb://mongo-town:27017/townDB
+      MONGO_CHARACTER_URI: mongodb://mongo-character-proxy:27017
+      POSTGRES_VOTING_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-voting-proxy:5432/voting_service
+      POSTGRES_TASK_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-task:5432/task_service
+      POSTGRES_RUMORS_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-rumors-proxy:5432/rumors_service
+      WAREHOUSE_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-warehouse:5432/data_warehouse
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/requirements.txt:/requirements.txt
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        pip install --no-cache-dir -r /requirements.txt
+        exec airflow scheduler
+    networks:
+      - backend
+    restart: unless-stopped
+#
+  # =============================
+  # METABASE - Data Visualization
+  # =============================
+#
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase
+    depends_on:
+      postgres-warehouse:
+        condition: service_healthy
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase
+      MB_DB_PORT: 5432
+      MB_DB_USER: ${POSTGRES_USER}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
+      MB_DB_HOST: postgres-warehouse
+    ports:
+      - "3001:3000"
+    networks:
+      - backend
+    restart: unless-stopped
+    volumes:
+      - metabase_data:/metabase-data
+#
   pgadmin:
     image: dpage/pgadmin4
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
       PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"   # host:container
     networks:
       - backend
     restart: unless-stopped
+
 
 networks:
   backend:
@@ -821,3 +999,6 @@ volumes:
   # PostgreSQL Rumors volumes
   postgres_rumors_primary:
   postgres_rumors_replica:
+  postgres_warehouse:
+  airflow_postgres:
+  metabase_data:
