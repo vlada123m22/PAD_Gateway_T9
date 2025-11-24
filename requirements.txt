@@ -4,3 +4,4 @@ httpx==0.25.1
 pyjwt==2.8.0
 python-multipart==0.0.6
 redis[asyncio]
+aio-pika>=10.2.0
