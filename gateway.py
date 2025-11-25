@@ -557,7 +557,6 @@ async def create_user(request: Request):
     )
 
 
-
 @app.get("/api/users")
 async def get_users(request: Request):
     """Get all users - cached"""

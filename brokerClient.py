@@ -13,13 +13,21 @@ class BrokerClient:
         self.channel: Optional[aio_pika.RobustChannel] = None
         self.response_futures = {}  # correlation_id -> Future
 
-    async def connect(self):
-        self.connection = await aio_pika.connect_robust(RABBITMQ_URL)
-        self.channel = await self.connection.channel()
-        # Create a single anonymous reply queue
-        self.callback_queue = await self.channel.declare_queue(exclusive=True)
-        await self.callback_queue.consume(self._on_response)
-        print("BrokerClient connected to RabbitMQ")
+    async def connect(self, max_retries=5, retry_delay=2):
+        for attempt in range(max_retries):
+            try:
+                self.connection = await aio_pika.connect_robust(RABBITMQ_URL)
+                self.channel = await self.connection.channel()
+                self.callback_queue = await self.channel.declare_queue(exclusive=True)
+                await self.callback_queue.consume(self._on_response)
+                print("BrokerClient connected to RabbitMQ")
+                return
+            except Exception as e:
+                print(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                else:
+                    raise
 
     async def _on_response(self, message: aio_pika.IncomingMessage):
         async with message.process():
