@@ -1,33 +1,32 @@
 # brokerClient.py
 import asyncio
+import os
 import aio_pika
 import json
 import uuid
 from typing import Optional
 
-RABBITMQ_URL = "amqp://rabbitmq:5672/"
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
 
 class BrokerClient:
     def __init__(self):
-        self.connection: Optional[aio_pika.RobustConnection] = None
-        self.channel: Optional[aio_pika.RobustChannel] = None
-        self.response_futures = {}  # correlation_id -> Future
+        self.connection = None
+        self.channel = None
 
-    async def connect(self, max_retries=5, retry_delay=2):
-        for attempt in range(max_retries):
+    async def connect(self):
+        for attempt in range(5):
             try:
+                print(f"Trying RabbitMQ connection attempt {attempt+1}/5...")
                 self.connection = await aio_pika.connect_robust(RABBITMQ_URL)
                 self.channel = await self.connection.channel()
-                self.callback_queue = await self.channel.declare_queue(exclusive=True)
-                await self.callback_queue.consume(self._on_response)
-                print("BrokerClient connected to RabbitMQ")
+                print("RabbitMQ connected!")
                 return
             except Exception as e:
-                print(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay)
-                else:
-                    raise
+                print("RabbitMQ connection failed:", e)
+                await asyncio.sleep(3)
+
+        print("Failed to connect to RabbitMQ after retries. Will retry on publish.")
+
 
     async def _on_response(self, message: aio_pika.IncomingMessage):
         async with message.process():

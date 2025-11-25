@@ -53,15 +53,24 @@ redis_client: Optional[aioredis.Redis] = None
 
 @app.on_event("startup")
 async def startup():
-    await brokerClient.connect()
     global redis_client
+
+    # --- Connect to Redis safely ---
     try:
         redis_client = aioredis.from_url(CACHE_URL, decode_responses=False)
         await redis_client.ping()
-        print("Redis cache connected")
+        print("Redis connected")
     except Exception as e:
+        print("Redis NOT connected:", e)
         redis_client = None
-        print("Redis not available:", e)
+
+    # --- Connect to RabbitMQ safely ---
+    try:
+        await brokerClient.connect()
+        print("Connected to RabbitMQ")
+    except Exception as e:
+        print("RabbitMQ NOT connected yet. Will retry later.", e)
+
 
 
 @app.on_event("shutdown")
