@@ -6,26 +6,23 @@ import json
 import uuid
 from typing import Optional
 
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://rabbitmq:5672/")
 
 class BrokerClient:
     def __init__(self):
         self.connection = None
         self.channel = None
 
-    async def connect(self):
-        for attempt in range(5):
+    async def connect_with_retry(url, retries=10, delay=2):
+        for attempt in range(1, retries + 1):
             try:
-                print(f"Trying RabbitMQ connection attempt {attempt+1}/5...")
-                self.connection = await aio_pika.connect_robust(RABBITMQ_URL)
-                self.channel = await self.connection.channel()
-                print("RabbitMQ connected!")
-                return
+                connection = await aio_pika.connect_robust(url)
+                print("Connected to RabbitMQ")
+                return connection
             except Exception as e:
-                print("RabbitMQ connection failed:", e)
-                await asyncio.sleep(3)
-
-        print("Failed to connect to RabbitMQ after retries. Will retry on publish.")
+                print(f"Connection attempt {attempt}/{retries} failed: {e}")
+                await asyncio.sleep(delay)
+        raise ConnectionError(f"Could not connect to RabbitMQ after {retries} attempts")
 
 
     async def _on_response(self, message: aio_pika.IncomingMessage):
