@@ -55,7 +55,7 @@ redis_client: Optional[aioredis.Redis] = None
 async def startup():
     global redis_client
 
-    # --- Connect to Redis safely ---
+    # Redis
     try:
         redis_client = aioredis.from_url(CACHE_URL, decode_responses=False)
         await redis_client.ping()
@@ -64,12 +64,11 @@ async def startup():
         print("Redis NOT connected:", e)
         redis_client = None
 
-    # --- Connect to RabbitMQ safely ---
+    # RabbitMQ
     try:
         await brokerClient.connect()
-        print("Connected to RabbitMQ")
     except Exception as e:
-        print("RabbitMQ NOT connected yet. Will retry later.", e)
+        print("RabbitMQ not connected after retries:", e)
 
 
 
