@@ -5,7 +5,7 @@ import json
 import uuid
 from typing import Optional
 
-RABBITMQ_URL = "amqp://guest:guest@rabbitmq:5672/"
+RABBITMQ_URL = "amqp://rabbitmq:5672/"
 
 class BrokerClient:
     def __init__(self):
