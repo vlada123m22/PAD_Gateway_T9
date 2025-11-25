@@ -25,10 +25,15 @@ class BrokerClient:
                 await self.callback_queue.consume(self._on_response)
                 print("Connected to RabbitMQ")
                 return
-            except aio_pika.exceptions.AMQPConnectionError as e:
-                print(f"RabbitMQ connection attempt {attempt} failed: {e}")
-                await asyncio.sleep(delay)
-        raise ConnectionError("Could not connect to RabbitMQ after several attempts")
+            except Exception as e:  # Catch all exceptions, not just AMQPConnectionError
+                print(f"error when creating transport: {e}")
+                if attempt < retries:
+                    print(f"Retrying in {delay} seconds...")
+                    await asyncio.sleep(delay)
+                else:
+                    print(f"Failed to connect to RabbitMQ after {retries} attempts")
+                    # Don't raise here - let the app start anyway
+                    return
 
 
 
