@@ -15,19 +15,20 @@ class BrokerClient:
         self.callback_queue = None
         self.response_futures = {}
 
-    async def connect(self, retries=10, delay=2):
+    async def connect(self, retries=10, delay=3):
         for attempt in range(1, retries + 1):
             try:
+                print(f"Attempting RabbitMQ connection {attempt}/{retries}...")
                 self.connection = await aio_pika.connect_robust(RABBITMQ_URL)
                 self.channel = await self.connection.channel()
                 self.callback_queue = await self.channel.declare_queue(exclusive=True)
                 await self.callback_queue.consume(self._on_response)
                 print("Connected to RabbitMQ")
                 return
-            except Exception as e:
-                print(f"Connection attempt {attempt}/{retries} failed: {e}")
+            except aio_pika.exceptions.AMQPConnectionError as e:
+                print(f"RabbitMQ connection attempt {attempt} failed: {e}")
                 await asyncio.sleep(delay)
-        raise ConnectionError(f"Could not connect to RabbitMQ after {retries} attempts")
+        raise ConnectionError("Could not connect to RabbitMQ after several attempts")
 
 
     async def _on_response(self, message: aio_pika.IncomingMessage):
