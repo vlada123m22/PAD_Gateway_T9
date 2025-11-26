@@ -567,9 +567,30 @@ async def create_user(request: Request):
 
 @app.get("/api/users")
 async def get_users(request: Request):
-    """Get all users - cached"""
-    service_url = f"{USER_SERVICE_URL}/users"
-    return await cached_proxy(service_url, request, dummy_user, ttl=15)
+    """Get all users via message broker"""
+    
+    message = {
+        "type": "GET_USERS",
+        "data": {},  # No extra data needed
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    try:
+        response = await brokerClient.publish_and_wait(
+            queue="gateway.user-service.request",
+            message=message,
+            timeout=BACKEND_TIMEOUT
+        )
+
+        return Response(
+            content=json.dumps(response.get("data", [])),
+            status_code=response.get("status_code", 200),
+            media_type="application/json"
+        )
+
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Timeout waiting for user service response")
+
 
 
 @app.get("/api/users/{user_id}")
