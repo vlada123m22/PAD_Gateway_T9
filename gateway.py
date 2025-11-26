@@ -637,6 +637,15 @@ async def join_lobby(lobby_id: str, request: Request):
             media_type=backend_response.headers.get("content-type"),
         )
 
+@app.post("/api/lobbies/{lobby_id}/start")
+async def start_game(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/start"
+    return await proxy_request(service_url, request, user)
+
+@app.patch("/api/lobbies/{lobby_id}/state")
+async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/state"
+    return await proxy_request(service_url, request, user)
 
 @app.get("/api/lobbies/{lobby_id}")
 async def get_lobby(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
@@ -644,12 +653,73 @@ async def get_lobby(lobby_id: str, request: Request, user: AuthUser = Depends(ve
     service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}"
     return await cached_proxy(service_url, request, user, ttl=10)
 
+@app.get("/api/lobbies/{lobby_id}/character/{character_id}")
+async def get_character(lobby_id: str, character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/character/{character_id}"
+    return await cached_proxy(service_url, request, user, ttl=10)
 
-@app.patch("/api/lobbies/{lobby_id}/state")
-async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/state"
+@app.get("/api/lobbies/{lobby_id}/phase")
+async def get_phase(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/phase"
+    return await cached_proxy(service_url, request, user, ttl=5)
+
+@app.post("/api/lobbies/{lobby_id}/phase/next")
+async def force_phase(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/phase/next"
     return await proxy_request(service_url, request, user)
 
+@app.post("/api/lobbies/{lobby_id}/announcement")
+async def send_announcement(lobby_id: str, request: Request):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/announcement"
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+            content=await request.body(),
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
+
+@app.get("/api/lobbies/character/{target_id}/role")
+async def get_character_role(target_id: str, request: Request):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/character/{target_id}/role"
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
+
+@app.post("/api/lobbies/character/{target_id}/status")
+async def update_character_status(target_id: str, request: Request):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/character/{target_id}/status"
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+            content=await request.body(),
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
 
 # ---------------------- TASK SERVICE ----------------------
 @app.post("/api/tasks/assign")
