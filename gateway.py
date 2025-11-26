@@ -1,3 +1,4 @@
+from uuid import uuid4
 from fastapi import Header
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import Response
@@ -16,6 +17,7 @@ import io
 import subprocess
 from fastapi.responses import StreamingResponse
 import logging
+from brokerClient import brokerClient
 
 
 app = FastAPI(title="Gateway Service")
@@ -52,13 +54,22 @@ redis_client: Optional[aioredis.Redis] = None
 @app.on_event("startup")
 async def startup():
     global redis_client
+
+    # Redis
     try:
         redis_client = aioredis.from_url(CACHE_URL, decode_responses=False)
         await redis_client.ping()
-        print("Redis cache connected")
+        print("Redis connected")
     except Exception as e:
+        print("Redis NOT connected:", e)
         redis_client = None
-        print("Redis not available:", e)
+
+    # RabbitMQ
+    try:
+        await brokerClient.connect()
+    except Exception as e:
+        print("RabbitMQ not connected after retries:", e)
+
 
 
 @app.on_event("shutdown")
@@ -302,10 +313,6 @@ def get_running_services():
 
 
 def get_container_ids_for_service(service_name: str):
-    """
-    Get all container IDs for a given service name.
-    Handles both exact matches and pattern matches.
-    """
     try:
         # Try exact name match first
         result = subprocess.run(
@@ -331,20 +338,6 @@ async def download_logs(
     lines: int = 1000,
     since: Optional[str] = None
 ):
-    """
-    Download logs from services as a ZIP file.
-    Automatically discovers all running services.
-
-    Query params:
-    - services: Comma-separated list of service names (optional)
-                If not provided, downloads all discovered services
-    - lines: Number of log lines per service (default: 1000, max: 10000)
-    - since: Time duration (e.g., "1h", "30m", "24h") - gets logs since this time ago
-
-    Example: /api/admin/logs/download
-    Example: /api/admin/logs/download?services=task-service,gateway_container&lines=500&since=1h
-    """
-
     # Limit lines to prevent huge downloads
     lines = min(lines, 10000)
 
@@ -482,20 +475,11 @@ Since: {since if since else 'All available logs'}
         }
     )
 
-
-
-
 @app.get("/api/logs/services")  # Changed path
 async def list_log_services(
     request: Request
     # Remove user parameter
 ):
-    """
-    List all available services for log download.
-    Automatically discovers running services from Docker.
-    Shows service name, container count, and container names.
-    """
-
     try:
         # Auto-discover services
         services_dict = get_running_services()
@@ -559,29 +543,44 @@ async def list_log_services(
 # ---------------------- USER SERVICE ----------------------
 @app.post("/api/users")
 async def create_user(request: Request):
-    """Create user - public endpoint"""
-    service_url = f"{USER_SERVICE_URL}/users"
-    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
-        backend_response = await client.request(
-            method=request.method,
-            url=service_url,
-            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
-            params=request.query_params,
-            content=await request.body(),
-        )
-        return Response(
-            content=backend_response.content,
-            status_code=backend_response.status_code,
-            headers=dict(backend_response.headers),
-            media_type=backend_response.headers.get("content-type"),
-        )
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
 
+    message = {
+        "type": "CREATE_USER",
+        "data": payload,
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.user-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.get("/api/users")
 async def get_users(request: Request):
-    """Get all users - cached"""
-    service_url = f"{USER_SERVICE_URL}/users"
-    return await cached_proxy(service_url, request, dummy_user, ttl=15)
+    message = {
+        "type": "GET_USERS",
+        "data": {},
+        "metadata": {"request_id": str(uuid4())}
+    }
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.user-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    return Response(
+        content=json.dumps(response.get("data", [])),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 
 @app.get("/api/users/{user_id}")
@@ -638,6 +637,15 @@ async def join_lobby(lobby_id: str, request: Request):
             media_type=backend_response.headers.get("content-type"),
         )
 
+@app.post("/api/lobbies/{lobby_id}/start")
+async def start_game(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/start"
+    return await proxy_request(service_url, request, user)
+
+@app.patch("/api/lobbies/{lobby_id}/state")
+async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/state"
+    return await proxy_request(service_url, request, user)
 
 @app.get("/api/lobbies/{lobby_id}")
 async def get_lobby(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
@@ -645,12 +653,73 @@ async def get_lobby(lobby_id: str, request: Request, user: AuthUser = Depends(ve
     service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}"
     return await cached_proxy(service_url, request, user, ttl=10)
 
+@app.get("/api/lobbies/{lobby_id}/character/{character_id}")
+async def get_character(lobby_id: str, character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/character/{character_id}"
+    return await cached_proxy(service_url, request, user, ttl=10)
 
-@app.patch("/api/lobbies/{lobby_id}/state")
-async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/state"
+@app.get("/api/lobbies/{lobby_id}/phase")
+async def get_phase(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/phase"
+    return await cached_proxy(service_url, request, user, ttl=5)
+
+@app.post("/api/lobbies/{lobby_id}/phase/next")
+async def force_phase(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/phase/next"
     return await proxy_request(service_url, request, user)
 
+@app.post("/api/lobbies/{lobby_id}/announcement")
+async def send_announcement(lobby_id: str, request: Request):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/announcement"
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+            content=await request.body(),
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
+
+@app.get("/api/lobbies/character/{target_id}/role")
+async def get_character_role(target_id: str, request: Request):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/character/{target_id}/role"
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
+
+@app.post("/api/lobbies/character/{target_id}/status")
+async def update_character_status(target_id: str, request: Request):
+    service_url = f"{GAME_SERVICE_URL}/lobbies/character/{target_id}/status"
+    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
+        backend_response = await client.request(
+            method=request.method,
+            url=service_url,
+            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
+            params=request.query_params,
+            content=await request.body(),
+        )
+        return Response(
+            content=backend_response.content,
+            status_code=backend_response.status_code,
+            headers=dict(backend_response.headers),
+            media_type=backend_response.headers.get("content-type"),
+        )
 
 # ---------------------- TASK SERVICE ----------------------
 @app.post("/api/tasks/assign")
