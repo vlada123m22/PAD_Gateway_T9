@@ -23,6 +23,11 @@ from brokerClient import brokerClient
 app = FastAPI(title="Gateway Service")
 
 # ---------------------- CONFIG ----------------------
+# ---------------------- CONFIG ----------------------
+BROKER_URL = os.getenv("BROKER_URL", "http://localhost:8001")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "gateway-service")
+BACKEND_TIMEOUT = 5
+
 TASK_SERVICE_URL = os.getenv("TASK_SERVICE_URL", "http://localhost:8180")
 VOTING_SERVICE_URL = os.getenv("VOTING_SERVICE_URL", "http://localhost:8181")
 USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:3000")
@@ -51,11 +56,11 @@ CACHE_DEFAULT_TTL = int(os.getenv("CACHE_DEFAULT_TTL", "15"))  # seconds
 redis_client: Optional[aioredis.Redis] = None
 
 
-@app.on_event("startup")
+app.on_event("startup")
 async def startup():
     global redis_client
 
-    # Redis
+    # Redis (keep your existing Redis code)
     try:
         redis_client = aioredis.from_url(CACHE_URL, decode_responses=False)
         await redis_client.ping()
@@ -64,16 +69,23 @@ async def startup():
         print("Redis NOT connected:", e)
         redis_client = None
 
-    # RabbitMQ
+    # Custom Message Broker (replaces RabbitMQ)
     try:
         await brokerClient.connect()
+        print("[BROKER] Startup connection successful")
     except Exception as e:
-        print("RabbitMQ not connected after retries:", e)
-
+        print(f"[BROKER] Not connected after retries: {e}")
 
 
 @app.on_event("shutdown")
 async def shutdown():
+    """Clean up resources on shutdown"""
+    try:
+        await brokerClient.close()
+        print("[BROKER] Closed successfully")
+    except Exception as e:
+        print(f"[BROKER] Error during shutdown: {e}")
+    
     if redis_client:
         await redis_client.close()
 
