@@ -1,6 +1,25 @@
 services:
+  message-broker:
+    image: livia994/message-broker:latest
+    container_name: message_broker_container
+    ports:
+      - "8001:8001"  # REST API
+      - "50051:50051" # gRPC
+    environment:
+      - BROKER_DATA_DIR=/data
+    volumes:
+      - broker_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - backend
+
   service_discovery:
-    image: nadea39/service-discovery:v1.2.0
+    image: nadea39/service-discovery:v1.3.0
     container_name: service_discovery_container
     ports:
       - "8500:8500"
@@ -21,6 +40,7 @@ services:
       - SERVICE_DISCOVERY_URL=http://service_discovery:8500
     networks:
       - backend
+
 
   # HAProxy Load Balancer
   load-balancer:
@@ -161,23 +181,29 @@ services:
     restart: unless-stopped
     volumes:
       - mongo_data:/data/db
+    ports:
+      - "27017:27017"
     networks:
       - backend
 
   user_service:
-    image: nadea39/user-management-service:1.8
+    image: nadea39/user-management-service:1.10
     deploy:
       replicas: 2
-    #    container_name: user_service_container
     environment:
       - MONGO_URI=${MONGO_URI_USER}
       - USE_MOCKS=true
       - PORT=3000
-      - GAME_SERVICE_URL=${GAME_SERVICE_URL}
-    #    ports:
-    #      - "3000:3000"
+      - SERVICE_DISCOVERY_URL=http://service_discovery:8500
+      - BROKER_URL=http://message-broker:8001
+      - SERVICE_NAME=user-service
     depends_on:
-      - mongo
+      mongo:
+        condition: service_started
+      service_discovery:
+        condition: service_started
+      message-broker:
+        condition: service_healthy
     networks:
       - backend
     env_file:
@@ -185,23 +211,31 @@ services:
 
   game_service:
     image: nadea39/gameservice:v1.0.10
-    deploy:
-      replicas: 2
-    #    container_name: gameservice_container
+    scale: 2
     environment:
       - MONGO_URI=${MONGO_URI_GAME}
-      - PORT=${PORT}
+      - PORT=3005
       - NODE_ENV=${NODE_ENV}
-      - USER_SERVICE_URL=${USER_SERVICE_URL}
+      - USER_SERVICE_URL=http://user_service:3000
       - JWT_SECRET=${JWT_SECRET}
       - JWT_ALGORITHM=${JWT_ALGORITHM}
-    #    ports:
-    #      - "3005:3005"
+      - SERVICE_DISCOVERY_URL=http://service_discovery:8500
+      - BROKER_URL=http://message-broker:8001
+      - SERVICE_NAME=game-service
     depends_on:
-      - mongo
-      - user_service
+      mongo:
+        condition: service_started
+      user_service:
+        condition: service_started
+      service_discovery:
+        condition: service_started
+      message-broker:
+        condition: service_healthy
     networks:
       - backend
+    env_file:
+      - .env
+
 
   db_userm_populator:
     image: nadea39/user-management-service:1.0
@@ -554,3 +588,4 @@ volumes:
   postgres-task:
   shop-postgres-data:
   postgres-rumors:
+  broker_data:
