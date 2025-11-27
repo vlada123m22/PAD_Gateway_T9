@@ -900,17 +900,58 @@ async def task_complete(task_id: int, character_id: str, request: Request, user:
     return await proxy_request(service_url, request, user)
 
 
+
+
 # ---------------------- VOTING SERVICE ----------------------
 @app.get("/api/voting/results/{lobby_id}")
-async def voting_results(lobby_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{VOTING_SERVICE_URL}/api/voting/results/{lobby_id}"
-    return await cached_proxy(service_url, request, user, ttl=10)
+async def voting_results(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    """Get voting results using message broker"""
+    message = {
+        "type": "GET_VOTING_RESULTS",
+        "data": {"lobby_id": lobby_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+    
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.voting-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 
 @app.post("/api/voting/cast")
 async def voting_cast(request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{VOTING_SERVICE_URL}/api/voting/cast"
-    return await proxy_request(service_url, request, user)
+    """Cast a vote using message broker"""
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
+    
+    message = {
+        "type": "CAST_VOTE",
+        "data": payload,
+        "metadata": {
+            "request_id": str(uuid4()),
+            "user_id": user.user_id,
+            "character_id": user.character_id
+        }
+    }
+    
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.voting-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    
+    return Response(
+        content=json.dumps(response.get("data", {})) if response.get("data") else b"",
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 # ---------------------- RUMORS SERVICE (NEW) ----------------------
 
