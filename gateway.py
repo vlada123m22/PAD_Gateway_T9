@@ -1,7 +1,7 @@
 from uuid import uuid4
 from fastapi import Header
 from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import httpx
 import os
@@ -592,10 +592,20 @@ async def get_users(request: Request):
 
 
 @app.get("/api/users/{user_id}")
-async def get_user(user_id: str, request: Request):
-    """Get user by ID - cached"""
-    service_url = f"{USER_SERVICE_URL}/users/{user_id}"
-    return await cached_proxy(service_url, request, dummy_user, ttl=15)
+async def get_user(user_id: str):
+    payload = {
+        "type": "GET_USER_BY_ID",
+        "data": { "id": user_id }
+    }
+    response = await brokerClient.publish_and_wait(
+        "gateway.user-service.request",
+        payload,
+        timeout=5
+    )
+    return JSONResponse(
+        status_code=response["status_code"],
+        content=response["data"]
+    )
 
 
 # ---------------------- GAME SERVICE ----------------------
