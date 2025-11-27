@@ -1,7 +1,7 @@
 from uuid import uuid4
 from fastapi import Header
 from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import httpx
 import os
@@ -18,11 +18,13 @@ import subprocess
 from fastapi.responses import StreamingResponse
 import logging
 from brokerClient import brokerClient
-
-
-app = FastAPI(title="Gateway Service")
+from contextlib import asynccontextmanager
 
 # ---------------------- CONFIG ----------------------
+BROKER_URL = os.getenv("BROKER_URL", "http://localhost:8001")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "gateway-service")
+BACKEND_TIMEOUT = 5
+
 TASK_SERVICE_URL = os.getenv("TASK_SERVICE_URL", "http://localhost:8180")
 VOTING_SERVICE_URL = os.getenv("VOTING_SERVICE_URL", "http://localhost:8181")
 USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:3000")
@@ -36,10 +38,8 @@ RUMORS_SERVICE_URL = os.getenv("RUMORS_SERVICE_URL", "http://rumors-service:8081
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
-#For "authenticating" service-to-service requests
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "")
 
-BACKEND_TIMEOUT = 5
 MAX_CONCURRENT_TASKS = 10
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
@@ -51,31 +51,39 @@ CACHE_DEFAULT_TTL = int(os.getenv("CACHE_DEFAULT_TTL", "15"))  # seconds
 redis_client: Optional[aioredis.Redis] = None
 
 
-@app.on_event("startup")
-async def startup():
+# ---------------------- LIFESPAN (DEFINE BEFORE APP) ----------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown"""
     global redis_client
-
+    
+    # Startup
+    print("[GATEWAY] Starting up...")
+    
     # Redis
     try:
         redis_client = aioredis.from_url(CACHE_URL, decode_responses=False)
         await redis_client.ping()
-        print("Redis connected")
+        print("[REDIS] Connected successfully")
     except Exception as e:
-        print("Redis NOT connected:", e)
+        print(f"[REDIS] NOT connected: {e}")
         redis_client = None
 
-    # RabbitMQ
+    # Custom Message Broker
     try:
         await brokerClient.connect()
+        print("[BROKER] Connected successfully")
     except Exception as e:
-        print("RabbitMQ not connected after retries:", e)
+        print(f"[BROKER] Connection failed: {e}")
+    
+    yield  # Application runs here
+    
 
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    if redis_client:
-        await redis_client.close()
+# ---------------------- APP INITIALIZATION ----------------------
+app = FastAPI(
+    title="Gateway Service",
+    lifespan=lifespan
+)
 
 # ---------------------- CACHE HELPERS ----------------------
 def _cache_key(method: str, full_url: str, headers_raw: list[tuple[bytes, bytes]]) -> str:
@@ -584,142 +592,290 @@ async def get_users(request: Request):
 
 
 @app.get("/api/users/{user_id}")
-async def get_user(user_id: str, request: Request):
-    """Get user by ID - cached"""
-    service_url = f"{USER_SERVICE_URL}/users/{user_id}"
-    return await cached_proxy(service_url, request, dummy_user, ttl=15)
+async def get_user(user_id: str):
+    payload = {
+        "type": "GET_USER_BY_ID",
+        "data": { "id": user_id }
+    }
+    response = await brokerClient.publish_and_wait(
+        "gateway.user-service.request",
+        payload,
+        timeout=5
+    )
+    return JSONResponse(
+        status_code=response["status_code"],
+        content=response["data"]
+    )
 
 
 # ---------------------- GAME SERVICE ----------------------
 @app.post("/api/lobbies")
 async def create_lobby(request: Request):
-    service_url = f"{GAME_SERVICE_URL}/lobbies"
-    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
-        backend_response = await client.request(
-            method=request.method,
-            url=service_url,
-            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
-            params=request.query_params,
-            content=await request.body(),
-        )
-        return Response(
-            content=backend_response.content,
-            status_code=backend_response.status_code,
-            headers=dict(backend_response.headers),
-            media_type=backend_response.headers.get("content-type"),
-        )
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
 
+    message = {
+        "type": "CREATE_LOBBY",
+        "data": payload,
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.get("/api/lobbies")
 async def get_lobbies(request: Request):
-    """Get all lobbies - cached"""
-    service_url = f"{GAME_SERVICE_URL}/lobbies"
-    return await cached_proxy(service_url, request, dummy_user, ttl=10)
+    message = {
+        "type": "GET_LOBBIES",
+        "data": {},
+        "metadata": {"request_id": str(uuid4())}
+    }
+    
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    
+    return Response(
+        content=json.dumps(response.get("data", [])),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
+@app.get("/api/lobbies/{lobby_id}")
+async def get_lobby(lobby_id: str, user: AuthUser = Depends(verify_token)):
+    message = {
+        "type": "GET_LOBBY",
+        "data": {"lobby_id": lobby_id, "user_id": user.id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+    
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.post("/api/lobbies/{lobby_id}/join")
 async def join_lobby(lobby_id: str, request: Request):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/join"
-    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
-        headers = {k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"}
-        headers["X-Lobby-ID"] = lobby_id
-        backend_response = await client.request(
-            method=request.method,
-            url=service_url,
-            headers=headers,
-            params=request.query_params,
-            content=await request.body(),
-        )
-        return Response(
-            content=backend_response.content,
-            status_code=backend_response.status_code,
-            headers=dict(backend_response.headers),
-            media_type=backend_response.headers.get("content-type"),
-        )
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
+
+    message = {
+        "type": "JOIN_LOBBY",
+        "data": {**payload, "lobby_id": lobby_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.post("/api/lobbies/{lobby_id}/start")
 async def start_game(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/start"
-    return await proxy_request(service_url, request, user)
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+
+    message = {
+        "type": "START_GAME",
+        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.patch("/api/lobbies/{lobby_id}/state")
 async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/state"
-    return await proxy_request(service_url, request, user)
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
 
-@app.get("/api/lobbies/{lobby_id}")
-async def get_lobby(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    """Get lobby info - cached and authenticated"""
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}"
-    return await cached_proxy(service_url, request, user, ttl=10)
+    message = {
+        "type": "UPDATE_LOBBY_STATE",
+        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
+
 
 @app.get("/api/lobbies/{lobby_id}/character/{character_id}")
-async def get_character(lobby_id: str, character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/character/{character_id}"
-    return await cached_proxy(service_url, request, user, ttl=10)
+async def get_character(lobby_id: str, character_id: str, user: AuthUser = Depends(verify_token)):
+    message = {
+        "type": "GET_CHARACTER",
+        "data": {
+            "lobby_id": lobby_id,
+            "character_id": character_id,
+            "user_id": user.id
+        },
+        "metadata": {"request_id": str(uuid4())}
+    }
+    
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
+
 
 @app.get("/api/lobbies/{lobby_id}/phase")
-async def get_phase(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/phase"
-    return await cached_proxy(service_url, request, user, ttl=5)
+async def get_phase(lobby_id: str, user: AuthUser = Depends(verify_token)):
+    message = {
+        "type": "GET_PHASE",
+        "data": {"lobby_id": lobby_id, "user_id": user.id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+    
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.post("/api/lobbies/{lobby_id}/phase/next")
 async def force_phase(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/phase/next"
-    return await proxy_request(service_url, request, user)
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+
+    message = {
+        "type": "FORCE_PHASE",
+        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.post("/api/lobbies/{lobby_id}/announcement")
 async def send_announcement(lobby_id: str, request: Request):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/announcement"
-    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
-        backend_response = await client.request(
-            method=request.method,
-            url=service_url,
-            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
-            params=request.query_params,
-            content=await request.body(),
-        )
-        return Response(
-            content=backend_response.content,
-            status_code=backend_response.status_code,
-            headers=dict(backend_response.headers),
-            media_type=backend_response.headers.get("content-type"),
-        )
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
+
+    message = {
+        "type": "SEND_ANNOUNCEMENT",
+        "data": {**payload, "lobby_id": lobby_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.get("/api/lobbies/character/{target_id}/role")
-async def get_character_role(target_id: str, request: Request):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/character/{target_id}/role"
-    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
-        backend_response = await client.request(
-            method=request.method,
-            url=service_url,
-            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
-            params=request.query_params,
-        )
-        return Response(
-            content=backend_response.content,
-            status_code=backend_response.status_code,
-            headers=dict(backend_response.headers),
-            media_type=backend_response.headers.get("content-type"),
-        )
+async def get_character_role(target_id: str):
+    message = {
+        "type": "GET_CHARACTER_ROLE",
+        "data": {"target_id": target_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.post("/api/lobbies/character/{target_id}/status")
 async def update_character_status(target_id: str, request: Request):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/character/{target_id}/status"
-    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
-        backend_response = await client.request(
-            method=request.method,
-            url=service_url,
-            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
-            params=request.query_params,
-            content=await request.body(),
-        )
-        return Response(
-            content=backend_response.content,
-            status_code=backend_response.status_code,
-            headers=dict(backend_response.headers),
-            media_type=backend_response.headers.get("content-type"),
-        )
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
+
+    message = {
+        "type": "UPDATE_CHARACTER_STATUS",
+        "data": {**payload, "target_id": target_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
+
 
 # ---------------------- TASK SERVICE ----------------------
 @app.post("/api/tasks/assign")
