@@ -385,7 +385,7 @@ services:
       timeout: 5s
 
   voting-service:
-    image: vladamusin/voting_service:0.0.7
+    image: vladamusin/voting_service:0.0.13
     deploy:
       replicas: 2
     #    container_name: voting-service
