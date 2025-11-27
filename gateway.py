@@ -977,6 +977,7 @@ async def toggle_town_phase(lobby_id: int, request: Request, user: AuthUser = De
 
 
 # ---------------------- CHARACTER SERVICE ----------------------
+
 @app.get("/api/characters")
 async def get_all_characters(user: AuthUser = Depends(verify_token)):
     response = await brokerClient.publish_and_wait(
@@ -988,7 +989,6 @@ async def get_all_characters(user: AuthUser = Depends(verify_token)):
         },
     )
     return response.get("data")
-
 
 
 @app.get("/api/characters/user/{user_id}")
@@ -1004,11 +1004,9 @@ async def get_character_by_user(user_id: str, user: AuthUser = Depends(verify_to
     return response.get("data")
 
 
-
 @app.patch("/api/characters/user/{user_id}")
 async def update_character(user_id: str, request: Request, user: AuthUser = Depends(verify_token)):
     body = await request.json()
-
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
@@ -1018,7 +1016,6 @@ async def update_character(user_id: str, request: Request, user: AuthUser = Depe
         },
     )
     return response.get("data")
-
 
 
 @app.get("/api/characters/user/{user_id}/balance")
@@ -1034,14 +1031,12 @@ async def get_balance(user_id: str, user: AuthUser = Depends(verify_token)):
     return response.get("data")
 
 
-
 @app.post("/api/characters/user/{user_id}/add-gold")
 async def add_gold(user_id: str, request: Request, user: AuthUser = Depends(get_user_or_internal)):
     if not user.roles:
         raise HTTPException(status_code=403, detail="Not authorized")
 
     body = await request.json()
-
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
@@ -1051,7 +1046,6 @@ async def add_gold(user_id: str, request: Request, user: AuthUser = Depends(get_
         },
     )
     return response.get("data")
-
 
 
 @app.get("/api/characters/{character_id}")
@@ -1080,7 +1074,6 @@ async def get_character_role(character_id: str, user: AuthUser = Depends(verify_
     return response.get("data")
 
 
-
 @app.get("/api/character/{character_id}/currency")
 async def get_character_currency(character_id: str, user: AuthUser = Depends(verify_token)):
     response = await brokerClient.publish_and_wait(
@@ -1094,11 +1087,9 @@ async def get_character_currency(character_id: str, user: AuthUser = Depends(ver
     return response.get("data")
 
 
-
 @app.post("/api/character/{character_id}/inventory/add")
 async def add_item_to_inventory(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
     body = await request.json()
-
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
@@ -1109,10 +1100,10 @@ async def add_item_to_inventory(character_id: str, request: Request, user: AuthU
     )
     return response.get("data")
 
+
 @app.post("/api/character/{character_id}/inventory/use")
 async def use_item(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
     body = await request.json()
-
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
