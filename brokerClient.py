@@ -26,11 +26,11 @@ class BrokerClient:
         """Connect to the custom message broker via HTTP health check"""
         for attempt in range(1, retries + 1):
             try:
-                print(f"Attempting broker connection {attempt}/{retries}...")
+                print(f"[BROKER] Attempting connection {attempt}/{retries}...")
                 
                 # Create persistent HTTP client
                 if not self.client:
-                    self.client = httpx.AsyncClient(timeout=5.0)
+                    self.client = httpx.AsyncClient(timeout=10.0)  # Increased timeout
                 
                 response = await self.client.get(f"{self.broker_url}/health")
                 response.raise_for_status()
@@ -38,20 +38,24 @@ class BrokerClient:
                 health_data = response.json()
                 if health_data.get("status") == "healthy":
                     self.connected = True
-                    print(f"[BROKER] Connected to custom message broker")
-                    print(f"[BROKER] Load balancing: {health_data.get('load_balancing')}")
-                    print(f"[BROKER] Backend: {health_data.get('broker')}")
-                    return
+                    print(f"[BROKER] ✓ Connected to message broker")
+                    print(f"[BROKER]   Load balancing: {health_data.get('load_balancing')}")
+                    print(f"[BROKER]   Backend: {health_data.get('broker')}")
+                    return True  # Indicate success
                     
+            except httpx.ConnectError as e:
+                print(f"[BROKER] ✗ Connection refused (attempt {attempt}/{retries})")
+            except httpx.TimeoutException as e:
+                print(f"[BROKER] ✗ Timeout (attempt {attempt}/{retries})")
             except Exception as e:
-                print(f"[BROKER] Connection failed (attempt {attempt}/{retries}): {e}")
-                if attempt < retries:
-                    print(f"[BROKER] Retrying in {delay} seconds...")
-                    await asyncio.sleep(delay)
-                else:
-                    print(f"[BROKER] Failed to connect after {retries} attempts")
-                    # Don't raise - let the app start anyway
-                    return
+                print(f"[BROKER] ✗ Failed (attempt {attempt}/{retries}): {e}")
+            
+            if attempt < retries:
+                print(f"[BROKER]   Retrying in {delay} seconds...")
+                await asyncio.sleep(delay)
+        
+        print(f"[BROKER] ✗ Failed to connect after {retries} attempts")
+        return False  # Indicate failure
 
     async def register_queue(self, queue_name: str):
         """Register a queue with the broker"""

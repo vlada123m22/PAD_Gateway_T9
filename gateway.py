@@ -18,11 +18,8 @@ import subprocess
 from fastapi.responses import StreamingResponse
 import logging
 from brokerClient import brokerClient
+from contextlib import asynccontextmanager
 
-
-app = FastAPI(title="Gateway Service")
-
-# ---------------------- CONFIG ----------------------
 # ---------------------- CONFIG ----------------------
 BROKER_URL = os.getenv("BROKER_URL", "http://localhost:8001")
 SERVICE_NAME = os.getenv("SERVICE_NAME", "gateway-service")
@@ -41,10 +38,8 @@ RUMORS_SERVICE_URL = os.getenv("RUMORS_SERVICE_URL", "http://rumors-service:8081
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
-#For "authenticating" service-to-service requests
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "")
 
-BACKEND_TIMEOUT = 5
 MAX_CONCURRENT_TASKS = 10
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
@@ -56,30 +51,35 @@ CACHE_DEFAULT_TTL = int(os.getenv("CACHE_DEFAULT_TTL", "15"))  # seconds
 redis_client: Optional[aioredis.Redis] = None
 
 
-app.on_event("startup")
-async def startup():
+# ---------------------- LIFESPAN (DEFINE BEFORE APP) ----------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown"""
     global redis_client
-
-    # Redis (keep your existing Redis code)
+    
+    # Startup
+    print("[GATEWAY] Starting up...")
+    
+    # Redis
     try:
         redis_client = aioredis.from_url(CACHE_URL, decode_responses=False)
         await redis_client.ping()
-        print("Redis connected")
+        print("[REDIS] Connected successfully")
     except Exception as e:
-        print("Redis NOT connected:", e)
+        print(f"[REDIS] NOT connected: {e}")
         redis_client = None
 
-    # Custom Message Broker (replaces RabbitMQ)
+    # Custom Message Broker
     try:
         await brokerClient.connect()
-        print("[BROKER] Startup connection successful")
+        print("[BROKER] Connected successfully")
     except Exception as e:
-        print(f"[BROKER] Not connected after retries: {e}")
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    """Clean up resources on shutdown"""
+        print(f"[BROKER] Connection failed: {e}")
+    
+    yield  # Application runs here
+    
+    # Shutdown
+    print("[GATEWAY] Shutting down...")
     try:
         await brokerClient.close()
         print("[BROKER] Closed successfully")
@@ -88,6 +88,13 @@ async def shutdown():
     
     if redis_client:
         await redis_client.close()
+        print("[REDIS] Closed successfully")
+
+# ---------------------- APP INITIALIZATION ----------------------
+app = FastAPI(
+    title="Gateway Service",
+    lifespan=lifespan
+)
 
 # ---------------------- CACHE HELPERS ----------------------
 def _cache_key(method: str, full_url: str, headers_raw: list[tuple[bytes, bytes]]) -> str:
