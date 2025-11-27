@@ -978,66 +978,153 @@ async def toggle_town_phase(lobby_id: int, request: Request, user: AuthUser = De
 
 # ---------------------- CHARACTER SERVICE ----------------------
 @app.get("/api/characters")
-async def get_all_characters(request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters"
-    return await cached_proxy(service_url, request, user, ttl=20)
+async def get_all_characters(user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "action": "get_all_characters",
+            "params": {},
+            "body": {},
+            "user": user.dict(),
+        },
+    )
+    return response.get("data")
 
 
 @app.get("/api/characters/user/{user_id}")
-async def get_character_by_user(user_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}"
-    return await cached_proxy(service_url, request, user, ttl=15)
+async def get_character_by_user(user_id: str, user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "action": "get_characters_by_user",
+            "params": {"userId": user_id},
+            "body": {},
+            "user": user.dict(),
+        },
+    )
+    return response.get("data")
 
 
 @app.patch("/api/characters/user/{user_id}")
 async def update_character(user_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}"
-    return await proxy_request(service_url, request, user)
+    body = await request.json()
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "action": "update_characters_by_user",
+            "params": {"userId": user_id},
+            "body": body,
+            "user": user.dict(),
+        },
+    )
+    return response.get("data")
 
 
 @app.get("/api/characters/user/{user_id}/balance")
-async def get_balance(user_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}/balance"
-    return await cached_proxy(service_url, request, user, ttl=15)
+async def get_balance(user_id: str, user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "action": "get_balance",
+            "params": {"userId": user_id},
+            "body": {},
+            "user": user.dict(),
+        },
+    )
+    return response.get("data")
 
 
 @app.post("/api/characters/user/{user_id}/add-gold")
-async def add_gold(user_id: str, request: Request, user: AuthUser = Depends(get_user_or_internal)):  # CHANGED THIS LINE
+async def add_gold(user_id: str, request: Request, user: AuthUser = Depends(get_user_or_internal)):
     if not user.roles:
-        raise HTTPException(status_code=403, detail="Cannot add gold. User not authorized")
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}/add-gold"
-    return await proxy_request(service_url, request, user)
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    body = await request.json()
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "action": "add_gold",
+            "params": {"userId": user_id},
+            "body": body,
+            "user": user.dict(),
+        },
+    )
+    return response.get("data")
 
 
 @app.get("/api/characters/{character_id}")
-async def get_character_by_id(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/{character_id}"
-    return await cached_proxy(service_url, request, user, ttl=15)
+async def get_character_by_id(character_id: str, user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "action": "get_character_by_id",
+            "params": {"characterId": character_id},
+            "body": {},
+            "user": user.dict(),
+        },
+    )
+    return response.get("data")
 
 @app.get("/api/character/{character_id}/role")
-async def get_character_role(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/role"
-    return await cached_proxy(service_url, request, user, ttl=10)
+async def get_character_role(character_id: str, user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "action": "get_role",
+            "params": {"characterId": character_id},
+            "body": {},
+            "user": user.dict(),
+        },
+    )
+    return response.get("data")
+
 
 @app.get("/api/character/{character_id}/currency")
-async def get_character_currency(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/currency"
-    return await cached_proxy(service_url, request, user, ttl=5)
+async def get_character_currency(character_id: str, user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "action": "get_currency",
+            "params": {"characterId": character_id},
+            "body": {},
+            "user": user.dict(),
+        },
+    )
+    return response.get("data")
 
-@app.get("/api/character/{character_id}/inventory")
-async def get_character_inventory(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/inventory"
-    return await cached_proxy(service_url, request, user, ttl=10)
 
 @app.post("/api/character/{character_id}/inventory/add")
-async def add_item_to_inventory(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/inventory/add"
-    return await proxy_request(service_url, request, user)
+async def add_item_to_inventory(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    body = await request.json()
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "action": "inventory_add",
+            "params": {"characterId": character_id},
+            "body": body,
+            "user": user.dict(),
+        },
+    )
+    return response.get("data")
 
 @app.post("/api/character/{character_id}/inventory/use")
-async def use_inventory_item(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/inventory/use"
-    return await proxy_request(service_url, request, user)
+async def use_item(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    body = await request.json()
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "action": "inventory_use",
+            "params": {"characterId": character_id},
+            "body": body,
+            "user": user.dict(),
+        },
+    )
+    return response.get("data")
+
 
 
 # ---------------------- SHOP SERVICE ----------------------
