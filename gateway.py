@@ -982,13 +982,13 @@ async def get_all_characters(user: AuthUser = Depends(verify_token)):
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
-            "action": "get_all_characters",
-            "params": {},
-            "body": {},
-            "user": user.dict(),
+            "type": "GET_ALL_CHARACTERS",
+            "data": {},
+            "metadata": {"request_id": str(uuid4())},
         },
     )
     return response.get("data")
+
 
 
 @app.get("/api/characters/user/{user_id}")
@@ -996,13 +996,13 @@ async def get_character_by_user(user_id: str, user: AuthUser = Depends(verify_to
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
-            "action": "get_characters_by_user",
-            "params": {"userId": user_id},
-            "body": {},
-            "user": user.dict(),
+            "type": "GET_CHARACTERS_BY_USER",
+            "data": {"userId": user_id},
+            "metadata": {"request_id": str(uuid4())},
         },
     )
     return response.get("data")
+
 
 
 @app.patch("/api/characters/user/{user_id}")
@@ -1012,13 +1012,13 @@ async def update_character(user_id: str, request: Request, user: AuthUser = Depe
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
-            "action": "update_characters_by_user",
-            "params": {"userId": user_id},
-            "body": body,
-            "user": user.dict(),
+            "type": "UPDATE_CHARACTERS_BY_USER",
+            "data": {"userId": user_id, "update": body},
+            "metadata": {"request_id": str(uuid4())},
         },
     )
     return response.get("data")
+
 
 
 @app.get("/api/characters/user/{user_id}/balance")
@@ -1026,13 +1026,13 @@ async def get_balance(user_id: str, user: AuthUser = Depends(verify_token)):
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
-            "action": "get_balance",
-            "params": {"userId": user_id},
-            "body": {},
-            "user": user.dict(),
+            "type": "GET_BALANCE",
+            "data": {"userId": user_id},
+            "metadata": {"request_id": str(uuid4())},
         },
     )
     return response.get("data")
+
 
 
 @app.post("/api/characters/user/{user_id}/add-gold")
@@ -1045,13 +1045,13 @@ async def add_gold(user_id: str, request: Request, user: AuthUser = Depends(get_
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
-            "action": "add_gold",
-            "params": {"userId": user_id},
-            "body": body,
-            "user": user.dict(),
+            "type": "ADD_GOLD",
+            "data": {"userId": user_id, **body},
+            "metadata": {"request_id": str(uuid4())},
         },
     )
     return response.get("data")
+
 
 
 @app.get("/api/characters/{character_id}")
@@ -1059,26 +1059,26 @@ async def get_character_by_id(character_id: str, user: AuthUser = Depends(verify
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
-            "action": "get_character_by_id",
-            "params": {"characterId": character_id},
-            "body": {},
-            "user": user.dict(),
+            "type": "GET_CHARACTER_BY_ID",
+            "data": {"characterId": character_id},
+            "metadata": {"request_id": str(uuid4())},
         },
     )
     return response.get("data")
+
 
 @app.get("/api/character/{character_id}/role")
 async def get_character_role(character_id: str, user: AuthUser = Depends(verify_token)):
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
-            "action": "get_role",
-            "params": {"characterId": character_id},
-            "body": {},
-            "user": user.dict(),
+            "type": "GET_ROLE",
+            "data": {"characterId": character_id},
+            "metadata": {"request_id": str(uuid4())},
         },
     )
     return response.get("data")
+
 
 
 @app.get("/api/character/{character_id}/currency")
@@ -1086,13 +1086,13 @@ async def get_character_currency(character_id: str, user: AuthUser = Depends(ver
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
-            "action": "get_currency",
-            "params": {"characterId": character_id},
-            "body": {},
-            "user": user.dict(),
+            "type": "GET_CURRENCY",
+            "data": {"characterId": character_id},
+            "metadata": {"request_id": str(uuid4())},
         },
     )
     return response.get("data")
+
 
 
 @app.post("/api/character/{character_id}/inventory/add")
@@ -1102,10 +1102,9 @@ async def add_item_to_inventory(character_id: str, request: Request, user: AuthU
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
-            "action": "inventory_add",
-            "params": {"characterId": character_id},
-            "body": body,
-            "user": user.dict(),
+            "type": "INVENTORY_ADD",
+            "data": {"characterId": character_id, **body},
+            "metadata": {"request_id": str(uuid4())},
         },
     )
     return response.get("data")
@@ -1117,13 +1116,13 @@ async def use_item(character_id: str, request: Request, user: AuthUser = Depends
     response = await brokerClient.publish_and_wait(
         queue="gateway.character-service.request",
         message={
-            "action": "inventory_use",
-            "params": {"characterId": character_id},
-            "body": body,
-            "user": user.dict(),
+            "type": "INVENTORY_USE",
+            "data": {"characterId": character_id, **body},
+            "metadata": {"request_id": str(uuid4())},
         },
     )
     return response.get("data")
+
 
 
 
