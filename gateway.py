@@ -78,17 +78,6 @@ async def lifespan(app: FastAPI):
     
     yield  # Application runs here
     
-    # Shutdown
-    print("[GATEWAY] Shutting down...")
-    try:
-        await brokerClient.close()
-        print("[BROKER] Closed successfully")
-    except Exception as e:
-        print(f"[BROKER] Error during shutdown: {e}")
-    
-    if redis_client:
-        await redis_client.close()
-        print("[REDIS] Closed successfully")
 
 # ---------------------- APP INITIALIZATION ----------------------
 app = FastAPI(
