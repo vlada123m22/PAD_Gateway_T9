@@ -940,40 +940,62 @@ async def gateway_list_rumors(request: Request, user: AuthUser = Depends(verify_
 # ---------------------- ADMIN ENDPOINTS (EXAMPLE) ----------------------
 
 # ---------------------- TOWN SERVICE ----------------------
-@app.get("/api/town")
-async def town_list(request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{TOWN_SERVICE_URL}/api/town"
-    return await cached_proxy(service_url, request, user, ttl=15)
 
+@app.get("/api/town")
+async def town_list(user: AuthUser = Depends(verify_token)):
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {
+            "type": "GET_TOWN",
+            "data": {},
+            "metadata": {"request_id": str(uuid4())}
+        }
+    )
+    return resp["data"]
 
 @app.get("/api/town/lobbies/{lobby_id}/locations/{location_id}/occupants")
-async def town_occupants(lobby_id: int, location_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{TOWN_SERVICE_URL}/api/town/lobbies/{lobby_id}/locations/{location_id}/occupants"
-    return await cached_proxy(service_url, request, user, ttl=10)
-
+async def town_occupants(lobby_id: int, location_id: int, user: AuthUser = Depends(verify_token)):
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {
+            "type": "GET_OCCUPANTS",
+            "data": {"lobbyId": lobby_id, "locationId": location_id}
+        }
+    )
+    return resp["data"]
 
 @app.post("/api/town/move")
 async def town_move(request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{TOWN_SERVICE_URL}/api/town/move"
-    return await proxy_request(service_url, request, user)
-
+    body = await request.json()
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {"type": "MOVE", "data": body}
+    )
+    return resp["data"]
 
 @app.get("/api/town/movements")
-async def town_movements(request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{TOWN_SERVICE_URL}/api/town/movements"
-    return await cached_proxy(service_url, request, user, ttl=10)
-
+async def town_movements(user: AuthUser = Depends(verify_token)):
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {"type": "GET_MOVEMENTS", "data": {}}
+    )
+    return resp["data"]
 
 @app.get("/api/town/phase/{lobby_id}")
-async def get_town_phase(lobby_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{TOWN_SERVICE_URL}/api/town/phase/{lobby_id}"
-    return await cached_proxy(service_url, request, user, ttl=5)
-
+async def get_town_phase(lobby_id: int, user: AuthUser = Depends(verify_token)):
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {"type": "GET_PHASE", "data": {"lobbyId": lobby_id}}
+    )
+    return resp["data"]
 
 @app.post("/api/town/phase/{lobby_id}/toggle")
-async def toggle_town_phase(lobby_id: int, request: Request, user: AuthUser = Depends(require_roles("admin"))):
-    service_url = f"{TOWN_SERVICE_URL}/api/town/phase/{lobby_id}/toggle"
-    return await proxy_request(service_url, request, user)
+async def toggle_town_phase(lobby_id: int, user: AuthUser = Depends(require_roles("admin"))):
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {"type": "TOGGLE_PHASE", "data": {"lobbyId": lobby_id}}
+    )
+    return resp["data"]
 
 
 # ---------------------- CHARACTER SERVICE ----------------------
