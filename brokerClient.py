@@ -58,13 +58,9 @@ class BrokerClient:
         return False  # Indicate failure
 
     async def register_queue(self, queue_name: str):
-        """Register a queue with the broker"""
         if not self.connected:
             await self.connect()
-        
         try:
-            full_queue_name = f"{queue_name}.{self.service_name}"
-            
             response = await self.client.post(
                 f"{self.broker_url}/register",
                 json={
@@ -73,10 +69,10 @@ class BrokerClient:
                 }
             )
             response.raise_for_status()
-            
-            self.queues[queue_name] = full_queue_name
-            print(f"[BROKER] Registered queue: {queue_name} -> {full_queue_name}")
-            
+
+            self.queues[queue_name] = queue_name
+            print(f"[BROKER] Registered queue: {queue_name}")
+
         except Exception as e:
             print(f"[BROKER] Failed to register queue {queue_name}: {e}")
             raise
