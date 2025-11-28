@@ -879,39 +879,150 @@ async def update_character_status(target_id: str, request: Request):
 
 # ---------------------- TASK SERVICE ----------------------
 @app.post("/api/tasks/assign")
-async def task_assign(request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{TASK_SERVICE_URL}/api/tasks/assign"
-    return await proxy_request(service_url, request, user)
+async def task_assign(request: Request):
+    """Assign a task using message broker (no authentication required)"""
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
+
+    message = {
+        "type": "ASSIGN_TASK",
+        "data": payload,
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.task-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 
 @app.get("/api/tasks/view/{character_id}")
-async def task_view(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    if user.character_id != character_id and user.roles:
-        raise HTTPException(status_code=403, detail="You can only view your own character's tasks")
-    service_url = f"{TASK_SERVICE_URL}/api/tasks/view/{character_id}"
-    return await cached_proxy(service_url, request, user, ttl=15)
+async def task_view(character_id: str, request: Request):
+    """View tasks for a character using message broker (no authentication required)"""
+    message = {
+        "type": "VIEW_TASKS",
+        "data": {"character_id": character_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.task-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 
 @app.post("/api/tasks/complete/{task_id}/{character_id}")
-async def task_complete(task_id: int, character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    if user.character_id != character_id and user.roles:
-        raise HTTPException(status_code=403, detail="You can only complete tasks for your own character")
-    service_url = f"{TASK_SERVICE_URL}/api/tasks/complete/{task_id}/{character_id}"
-    return await proxy_request(service_url, request, user)
+async def task_complete(task_id: int, character_id: str, request: Request):
+    """Complete a task using message broker (no authentication required)"""
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+
+    message = {
+        "type": "COMPLETE_TASK",
+        "data": {
+            **payload,
+            "task_id": task_id,
+            "character_id": character_id
+        },
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.task-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 
 # ---------------------- VOTING SERVICE ----------------------
 @app.get("/api/voting/results/{lobby_id}")
-async def voting_results(lobby_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{VOTING_SERVICE_URL}/api/voting/results/{lobby_id}"
-    return await cached_proxy(service_url, request, user, ttl=10)
+async def voting_results(lobby_id: str, request: Request):
+    """Get voting results using message broker"""
+    message = {
+        "type": "GET_VOTING_RESULTS",
+        "data": {"lobby_id": lobby_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.voting-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
+
+
+# ---------------------- VOTING SERVICE ----------------------
+@app.get("/api/voting/results/{lobby_id}")
+async def voting_results(lobby_id: str, request: Request):
+    """Get voting results using message broker"""
+    message = {
+        "type": "GET_VOTING_RESULTS",
+        "data": {"lobby_id": lobby_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.voting-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 
 @app.post("/api/voting/cast")
-async def voting_cast(request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{VOTING_SERVICE_URL}/api/voting/cast"
-    return await proxy_request(service_url, request, user)
+async def voting_cast(request: Request):
+    """Cast a vote using message broker"""
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
 
+    message = {
+        "type": "CAST_VOTE",
+        "data": payload,
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.voting-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})) if response.get("data") else b"",
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 # ---------------------- RUMORS SERVICE (NEW) ----------------------
 
 @app.post("/api/rumors/generate")
