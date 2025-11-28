@@ -4,9 +4,12 @@ import json
 import uuid
 from typing import Optional, Dict
 import httpx
+import time
 
 BROKER_URL = os.getenv("BROKER_URL", "http://localhost:8001")
 SERVICE_NAME = os.getenv("SERVICE_NAME", "gateway-service")
+PROCESS_RETRIES = int(os.getenv("BROKER_PROCESS_RETRIES", "3"))
+PROCESS_RETRY_DELAY = float(os.getenv("BROKER_PROCESS_RETRY_DELAY", "0.5"))
 MAX_RETRIES = 10
 RETRY_DELAY = 3  # seconds
 POLL_INTERVAL = 1  # seconds
@@ -113,13 +116,39 @@ class BrokerClient:
                     messages = data.get("messages", [])
                     
                     for msg in messages:
-                        try:
-                            payload = msg.get("payload", {})
-                            await callback(payload)
-                            print(f"[BROKER] Processed message from {queue_name}")
-                        except Exception as e:
-                            print(f"[BROKER] Error processing message: {e}")
-                            
+                        payload = msg.get("payload", {})
+                        success = False
+                        last_exc = None
+                        for attempt in range(1, PROCESS_RETRIES + 1):
+                            try:
+                                await callback(payload)
+                                success = True
+                                print(f"[BROKER] Processed message from {queue_name} (attempt {attempt})")
+                                break
+                            except Exception as e:
+                                last_exc = e
+                                print(f"[BROKER] Error processing message (attempt {attempt}/{PROCESS_RETRIES}): {e}")
+                                if attempt < PROCESS_RETRIES:
+                                    await asyncio.sleep(PROCESS_RETRY_DELAY)
+                        if not success:
+                            # Publish to broker dead letter channel
+                            try:
+                                dl = {
+                                    "id": msg.get("id") or str(uuid.uuid4()),
+                                    "source_service": self.service_name,
+                                    "target_service": queue_name,
+                                    "topic": full_queue_name,
+                                    "payload": payload,
+                                    "reason": str(last_exc),
+                                    "attempt_count": PROCESS_RETRIES,
+                                    "timestamp_ms": int(time.time() * 1000)
+                                }
+                                resp = await self.client.post(f"{self.broker_url}/deadletter/publish", json=dl)
+                                resp.raise_for_status()
+                                print(f"[BROKER] Published message to dead-letter (topic={full_queue_name})")
+                            except Exception as e2:
+                                # If dead letter publishing fails, log and continue: message already consumed so we avoid blocking processing
+                                print(f"[BROKER] Failed to publish to dead letter for {full_queue_name}: {e2}")
             except Exception as e:
                 if not isinstance(e, asyncio.CancelledError):
                     print(f"[BROKER] Error polling {queue_name}: {e}")
