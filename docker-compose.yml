@@ -274,9 +274,9 @@ services:
       '
 
   # HAProxy for MongoDB (provides single endpoint with automatic failover)
-  mongo-proxy:
+  mongo:
     image: haproxy:2.8-alpine
-    container_name: mongo-proxy
+    container_name: mongo
     volumes:
       - ./haproxy-mongo.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     ports:
@@ -364,9 +364,9 @@ services:
         });
       '
 
-  mongo-character-proxy:
+  mongo-character:
     image: haproxy:2.8-alpine
-    container_name: mongo-character-proxy
+    container_name: mongo-character
     volumes:
       - ./haproxy-mongo-character.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     ports:
@@ -614,17 +614,17 @@ services:
   # =============================
 
   user_service:
-    image: nadea39/user-management-service:1.8
+    image: nadea39/user-management-service:1.10
     deploy:
       replicas: 1
     environment:
       # Connect through MongoDB proxy for automatic failover
-      - MONGO_URI=mongodb://mongo-proxy:27017/user_management?replicaSet=rs0
+      - MONGO_URI=mongodb://mongo:27017/user_management?replicaSet=rs0
       - USE_MOCKS=true
       - PORT=3000
       - GAME_SERVICE_URL=${GAME_SERVICE_URL}
     depends_on:
-      - mongo-proxy
+      - mongo
     networks:
       - backend
     env_file:
@@ -636,14 +636,14 @@ services:
       replicas: 1
     environment:
       # Connect through MongoDB proxy
-      - MONGO_URI=mongodb://mongo-proxy:27017/gameservice?replicaSet=rs0
+      - MONGO_URI=mongodb://mongo:27017/gameservice?replicaSet=rs0
       - PORT=${PORT}
       - NODE_ENV=${NODE_ENV}
       - USER_SERVICE_URL=${USER_SERVICE_URL}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_ALGORITHM=${JWT_ALGORITHM}
     depends_on:
-      - mongo-proxy
+      - mongo
       - user_service
     networks:
       - backend
@@ -669,11 +669,11 @@ services:
     restart: unless-stopped
     environment:
       # Connect through MongoDB proxy
-      - MONGO_URI=mongodb://mongo-character-proxy:27017/characterDB?replicaSet=rs-character
+      - MONGO_URI=mongodb://mongo-character:27017/characterDB?replicaSet=rs-character
       - PORT=4002
       - NODE_ENV=production
     depends_on:
-      - mongo-character-proxy
+      - mongo-character
     networks:
       - backend
 
@@ -911,9 +911,9 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
 #
       # Connection strings for source databases
-      MONGO_PRIMARY_URI: mongodb://mongo-proxy:27017
+      MONGO_PRIMARY_URI: mongodb://mongo:27017
       MONGO_TOWN_URI: mongodb://mongo-town:27017/townDB
-      MONGO_CHARACTER_URI: mongodb://mongo-character-proxy:27017
+      MONGO_CHARACTER_URI: mongodb://mongo-character:27017
       POSTGRES_VOTING_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-voting-proxy:5432/voting_service
       POSTGRES_TASK_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-task:5432/task_service
       POSTGRES_RUMORS_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-rumors-proxy:5432/rumors_service
