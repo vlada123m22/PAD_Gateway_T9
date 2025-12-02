@@ -3,4 +3,13 @@ uvicorn[standard]==0.24.0
 httpx==0.25.1
 pyjwt==2.8.0
 python-multipart==0.0.6
+# Required by pydantic v2 for EmailStr and FastAPI OpenAPI models
+email-validator>=2.0,<3
+redis[asyncio]
+
+# Data libs used by the gateway (safe to keep; no Airflow here)
+pymongo==4.6.1
+psycopg2-binary==2.9.9
+pandas==2.1.4
+sqlalchemy==1.4.51
 redis[asyncio]

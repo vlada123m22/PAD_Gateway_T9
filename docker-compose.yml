@@ -1,27 +1,27 @@
 services:
-  service_discovery:
-    image: nadea39/service-discovery:v1.2.0
-    container_name: service_discovery_container
-    ports:
-      - "8500:8500"
-    environment:
-      - PYTHONUNBUFFERED=1
-    networks:
-      - backend
-
-  notifications:
-    image: nadea39/notification-service:v1.0.0
-    container_name: notifications_container
-    ports:
-      - "8600:8600"
-    environment:
-      - PYTHONUNBUFFERED=1
-      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
-      - SERVICE_DISCOVERY_URL=http://service_discovery:8500
-    networks:
-      - backend
-
+  #service_discovery:
+  #  image: nadea39/service-discovery:v1.2.0
+  #  container_name: service_discovery_container
+  #  ports:
+  #    - "8500:8500"
+  #  environment:
+  #    - PYTHONUNBUFFERED=1
+  #  networks:
+  #    - backend
+  #
+  #notifications:
+  #  image: nadea39/notification-service:v1.0.0
+  #  container_name: notifications_container
+  #  ports:
+  #    - "8600:8600"
+  #  environment:
+  #    - PYTHONUNBUFFERED=1
+  #    - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+  #    - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+  #    - SERVICE_DISCOVERY_URL=http://service_discovery:8500
+  #  networks:
+  #    - backend
+  #
   # HAProxy Load Balancer
   load-balancer:
     image: haproxy:2.8-alpine
@@ -42,79 +42,132 @@ services:
     ports:
       - "8180:8180"
       - "8181:8181"
-      - "8404:8404" # HAProxy stats page
+      - "8404:8404"
+
+  # =============================
+  # SHARDED REDIS CACHE CLUSTER
+  # =============================
+
+  gateway_cache_1:
+    image: redis:7-alpine
+    container_name: gateway_cache_1
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gateway_cache_2:
+    image: redis:7-alpine
+    container_name: gateway_cache_2
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6380:6379"
+    networks:
+      - backend
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gateway_cache_3:
+    image: redis:7-alpine
+    container_name: gateway_cache_3
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6381:6379"
+    networks:
+      - backend
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   # =============================
   # ELK Stack + Filebeat setup
   # =============================
 
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
-    container_name: elasticsearch
-    environment:
-      - discovery.type=single-node
-      - ES_JAVA_OPTS=-Xms1g -Xmx1g
-      - xpack.security.enabled=false
-      - xpack.security.http.ssl.enabled=false
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    volumes:
-      - elasticsearch_data:/usr/share/elasticsearch/data
-    ports:
-      - "9200:9200"
-    networks:
-      - backend
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  logstash:
-    image: docker.elastic.co/logstash/logstash:8.15.0
-    container_name: logstash
-    depends_on:
-      - elasticsearch
-    volumes:
-      - ./elk/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
-    ports:
-      - "5044:5044" # Filebeat input
-      - "9600:9600" # Logstash monitoring API
-    networks:
-      - backend
-    restart: unless-stopped
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.15.0
-    container_name: kibana
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    ports:
-      - "5601:5601"
-    depends_on:
-      - elasticsearch
-    networks:
-      - backend
-    restart: unless-stopped
-
-  filebeat:
-    image: docker.elastic.co/beats/filebeat:8.15.0
-    container_name: filebeat
-    user: root
-    command: ["--strict.perms=false"]
-    volumes:
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./elk/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-      - filebeat_data:/usr/share/filebeat/data
-    depends_on:
-      - logstash
-    networks:
-      - backend
-    restart: unless-stopped
+  #elasticsearch:
+  #  image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+  #  container_name: elasticsearch
+  #  environment:
+  #    - discovery.type=single-node
+  #    - ES_JAVA_OPTS=-Xms1g -Xmx1g
+  #    - xpack.security.enabled=false
+  #    - xpack.security.http.ssl.enabled=false
+  #  ulimits:
+  #    memlock:
+  #      soft: -1
+  #      hard: -1
+  #  volumes:
+  #    - elasticsearch_data:/usr/share/elasticsearch/data
+  #  ports:
+  #    - "9200:9200"
+  #  networks:
+  #    - backend
+  #  restart: unless-stopped
+  #  healthcheck:
+  #    test: ["CMD-SHELL", "curl -f http://localhost:9200 || exit 1"]
+  #    interval: 10s
+  #    timeout: 5s
+  #    retries: 10
+  #
+  #logstash:
+  #  image: docker.elastic.co/logstash/logstash:8.15.0
+  #  container_name: logstash
+  #  depends_on:
+  #    - elasticsearch
+  #  volumes:
+  #    - ./elk/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+  #  ports:
+  #    - "5044:5044"
+  #    - "9600:9600"
+  #  networks:
+  #    - backend
+  #  restart: unless-stopped
+  #
+  #kibana:
+  #  image: docker.elastic.co/kibana/kibana:8.15.0
+  #  container_name: kibana
+  #  environment:
+  #    - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+  #  ports:
+  #    - "5601:5601"
+  #  depends_on:
+  #    - elasticsearch
+  #  networks:
+  #    - backend
+  #  restart: unless-stopped
+  #
+  #filebeat:
+  #  image: docker.elastic.co/beats/filebeat:8.15.0
+  #  container_name: filebeat
+  #  user: root
+  #  command: ["--strict.perms=false"]
+  #  volumes:
+  #    - /var/lib/docker/containers:/var/lib/docker/containers:ro
+  #    - /var/run/docker.sock:/var/run/docker.sock:ro
+  #    - ./elk/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+  #    - filebeat_data:/usr/share/filebeat/data
+  #  depends_on:
+  #    - logstash
+  #  networks:
+  #    - backend
+  #  restart: unless-stopped
+  #
+  # =============================
+  # GATEWAY SERVICE
+  # =============================
 
   gateway:
     build: .
@@ -122,7 +175,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # For Windows - use npipe
       - //./pipe/docker_engine://./pipe/docker_engine
     environment:
       DOCKER_HOST: "npipe:////./pipe/docker_engine"
@@ -137,95 +189,108 @@ services:
       JWT_ALGORITHM: ${JWT_ALGORITHM}
       TOWN_SERVICE_URL: http://townservice:4001
       CHARACTER_SERVICE_URL: http://characterservice:4002
-      CACHE_URL: redis://gateway_cache:6379
+      CACHE_SHARD_URLS: redis://gateway_cache_1:6379,redis://gateway_cache_2:6379,redis://gateway_cache_3:6379
       CACHE_DEFAULT_TTL: 15
+      VIRTUAL_NODES: 150
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
     depends_on:
-      - gateway_cache
-      - load-balancer
+      gateway_cache_1:
+        condition: service_healthy
+      gateway_cache_2:
+        condition: service_healthy
+      gateway_cache_3:
+        condition: service_healthy
+      load-balancer:
+        condition: service_started
     networks:
       - backend
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/cache/stats" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  gateway_cache:
-    image: redis:7
-    container_name: gateway_cache
+  # =============================
+  # MONGODB REPLICA SET (User & Game Services)
+  # =============================
+
+  mongo-primary:
+    image: mongo:6
+    container_name: mongo-primary
+    command: mongod --replSet rs0 --bind_ip_all
     restart: unless-stopped
     ports:
-      - "6379:6379"
-    networks:
-      - backend
-
-  mongo:
-    image: mongo:6
-    container_name: mongo_container
-    restart: unless-stopped
+      - "27017:27017"
     volumes:
-      - mongo_data:/data/db
+      - mongo_primary_data:/data/db
     networks:
       - backend
+    healthcheck:
+      test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  user_service:
-    image: nadea39/user-management-service:1.8
-    deploy:
-      replicas: 2
-    #    container_name: user_service_container
-    environment:
-      - MONGO_URI=${MONGO_URI_USER}
-      - USE_MOCKS=true
-      - PORT=3000
-      - GAME_SERVICE_URL=${GAME_SERVICE_URL}
-    #    ports:
-    #      - "3000:3000"
-    depends_on:
-      - mongo
+  mongo-secondary-1:
+    image: mongo:6
+    container_name: mongo-secondary-1
+    command: mongod --replSet rs0 --bind_ip_all
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_secondary_1_data:/data/db
     networks:
       - backend
-    env_file:
-      - .env
-
-  game_service:
-    image: nadea39/gameservice:v1.0.7
-    deploy:
-      replicas: 2
-    #    container_name: gameservice_container
-    environment:
-      - MONGO_URI=${MONGO_URI_GAME}
-      - PORT=${PORT}
-      - NODE_ENV=${NODE_ENV}
-      - USER_SERVICE_URL=${USER_SERVICE_URL}
-      - JWT_SECRET=${JWT_SECRET}
-      - JWT_ALGORITHM=${JWT_ALGORITHM}
-    #    ports:
-    #      - "3005:3005"
     depends_on:
-      - mongo
-      - user_service
-    networks:
-      - backend
+      - mongo-primary
+    healthcheck:
+      test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  db_userm_populator:
-    image: nadea39/user-management-service:1.0
-    container_name: db_populator_container
-    environment:
-      - MONGO_URI=mongodb://mongo:27017/user_management
-    depends_on:
-      - mongo
-    command: ["node", "src/populate-db.js"]
+
+  mongo-init:
+    image: mongo:6
+    container_name: mongo-init
     restart: "no"
-
-  db_game_populator:
-    image: nadea39/gameservice:v1.0.2
-    container_name: game_db_populator
-    environment:
-      - MONGO_URI=mongodb://mongo:27017/gameservice
     depends_on:
-      - mongo
-    command: ["node", "src/gameServicePopulator.js"]
-    restart: "no"
+      mongo-primary:
+        condition: service_healthy
+      mongo-secondary-1:
+        condition: service_healthy
     networks:
       - backend
+    command: >
+      mongosh --host mongo-primary:27017 --eval '
+        rs.initiate({
+          _id: "rs0",
+          members: [
+            { _id: 0, host: "mongo-primary:27017", priority: 2 },
+            { _id: 1, host: "mongo-secondary-1:27017", priority: 1 }
+          ]
+        });
+      '
 
-  # --- all the extra services from main branch ---
+  # HAProxy for MongoDB (provides single endpoint with automatic failover)
+  mongo:
+    image: haproxy:2.8-alpine
+    container_name: mongo
+    volumes:
+      - ./haproxy-mongo.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "27020:27017"
+    networks:
+      - backend
+    depends_on:
+      - mongo-init
+    restart: unless-stopped
+
+  # =============================
+  # MONGODB TOWN
+  # =============================
+
   mongo-town:
     image: mongo:6
     container_name: mongo-town
@@ -237,97 +302,153 @@ services:
     networks:
       - backend
 
-  townservice:
-    image: livia994/townservice:latest
-    deploy:
-      replicas: 2
-    #    container_name: townservice
-    restart: unless-stopped
-    #    ports:
-    #      - "4001:4001"
-    environment:
-      - MONGO_URI=mongodb://mongo-town:27017/townDB
-      - PORT=4001
-      - NODE_ENV=production
-    depends_on:
-      - mongo-town
-      - db_town_populator
-    networks:
-      - backend
+  # =============================
+  # MONGODB REPLICA SET - CHARACTER
+  # =============================
 
-  db_town_populator:
-    image: livia994/townservice:3.0
-    container_name: town_db_populator
-    command: ["node", "src/db/seed/town-seed.js"]
-    environment:
-      - MONGO_URI=mongodb://mongo-town:27017/townDB
-    depends_on:
-      - mongo-town
-    networks:
-      - backend
-    restart: "no"
-
-  mongo-character:
+  mongo-character-primary:
     image: mongo:6
-    container_name: mongo-character
+    container_name: mongo-character-primary
+    command: mongod --replSet rs-character --bind_ip_all
     restart: unless-stopped
     ports:
-      - "27018:27017"
+      - "27024:27017"
     volumes:
-      - mongo-character-data:/data/db
+      - mongo_character_primary_data:/data/db
     networks:
       - backend
+    healthcheck:
+      test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  characterservice:
-    image: livia994/characterservice:latest
-    deploy:
-      replicas: 2
-    #    container_name: characterservice
+  mongo-character-secondary-1:
+    image: mongo:6
+    container_name: mongo-character-secondary-1
+    command: mongod --replSet rs-character --bind_ip_all
     restart: unless-stopped
-    #    ports:
-    #      - "4002:4002"
-    environment:
-      - MONGO_URI=mongodb://mongo-character:27017/characterDB
-      - PORT=4002
-      - NODE_ENV=production
-    depends_on:
-      - mongo-character
-      - db_character_populator
+    ports:
+      - "27025:27017"
+    volumes:
+      - mongo_character_secondary_1_data:/data/db
     networks:
       - backend
+    depends_on:
+      - mongo-character-primary
+    healthcheck:
+      test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  db_character_populator:
-    image: livia994/characterservice:1.10
-    container_name: character_db_populator
-    command: ["node", "src/db/seed/character-seed.js"]
-    environment:
-      - MONGO_URI=mongodb://mongo-character:27017/characterDB
-    depends_on:
-      - mongo-character
-    networks:
-      - backend
+  mongo-character-init:
+    image: mongo:6
+    container_name: mongo-character-init
     restart: "no"
+    depends_on:
+      mongo-character-primary:
+        condition: service_healthy
+      mongo-character-secondary-1:
+        condition: service_healthy
+    networks:
+      - backend
+    command: >
+      mongosh --host mongo-character-primary:27017 --eval '
+        rs.initiate({
+          _id: "rs-character",
+          members: [
+            { _id: 0, host: "mongo-character-primary:27017", priority: 2 },
+            { _id: 1, host: "mongo-character-secondary-1:27017", priority: 1 }
+          ]
+        });
+      '
 
-  postgres-voting:
-    container_name: postgres-voting
+  mongo-character:
+    image: haproxy:2.8-alpine
+    container_name: mongo-character
+    volumes:
+      - ./haproxy-mongo-character.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "27026:27017"
+    networks:
+      - backend
+    depends_on:
+      - mongo-character-init
+    restart: unless-stopped
+
+  # =============================
+  # POSTGRESQL WITH REPLICATION - VOTING
+  # =============================
+
+  postgres-voting-primary:
     image: postgres:15
+    container_name: postgres-voting-primary
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: voting_service
-      PGDATA: /data/postgres
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_PASSWORD}
+    command: |
+      postgres 
+      -c wal_level=replica 
+      -c max_wal_senders=3 
+      -c max_replication_slots=3
+      -c hot_standby=on
     volumes:
-      - postgres-voting:/data/postgres
-    ports:
-      - "5442:5432"
+      - postgres_voting_primary:/var/lib/postgresql/data
+      - ./postgres-init/voting-primary.sh:/docker-entrypoint-initdb.d/init.sh
     networks:
       - backend
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER}" ]
       interval: 5s
       retries: 5
-      timeout: 5s
+
+  postgres-voting-replica:
+    image: postgres:15
+    container_name: postgres-voting-replica
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    command: |
+      bash -c "
+      until pg_basebackup -h postgres-voting-primary -D /var/lib/postgresql/data -U replicator -w -P -R; do
+        echo 'Waiting for primary to be ready...'
+        sleep 5
+      done
+      postgres -c hot_standby=on
+      "
+    volumes:
+      - postgres_voting_replica:/var/lib/postgresql/data
+    depends_on:
+      postgres-voting-primary:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  postgres-voting-proxy:
+    image: haproxy:2.8-alpine
+    container_name: postgres-voting-proxy
+    volumes:
+      - ./haproxy-postgres-voting.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "5442:5432"
+    networks:
+      - backend
+    depends_on:
+      - postgres-voting-primary
+      - postgres-voting-replica
+    restart: unless-stopped
+
+  # =============================
+  # POSTGRESQL WITH REPLICATION - TASK
+  # =============================
 
   postgres-task:
     container_name: postgres-task
@@ -345,30 +466,232 @@ services:
       - backend
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER}" ]
       interval: 5s
       retries: 5
       timeout: 5s
 
-  voting-service:
-    image: vladamusin/voting_service:0.0.7
-    deploy:
-      replicas: 2
-    #    container_name: voting-service
-    #    ports:
-    #      - "8181:8181"
+  # =============================
+  # POSTGRESQL WITH REPLICATION - SHOP
+  # =============================
+
+  postgres-shop-primary:
+    image: postgres:15
+    container_name: postgres-shop-primary
+    environment:
+      POSTGRES_USER: shopuser
+      POSTGRES_PASSWORD: shoppass
+      POSTGRES_DB: shop_service
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: shoppass
+    command: |
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=3
+      -c max_replication_slots=3
+      -c hot_standby=on
+    volumes:
+      - postgres_shop_primary:/var/lib/postgresql/data
+      - ./postgres-init/shop-primary.sh:/docker-entrypoint-initdb.d/init.sh
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U shopuser" ]
+      interval: 5s
+      retries: 5
+#
+  postgres-shop-replica:
+    image: postgres:15
+    container_name: postgres-shop-replica
+    environment:
+      POSTGRES_USER: shopuser
+      POSTGRES_PASSWORD: shoppass
+      PGUSER: shopuser
+      PGPASSWORD: shoppass
+    command: |
+      bash -c "
+      until pg_basebackup -h postgres-shop-primary -D /var/lib/postgresql/data -U replicator -w -P -R; do
+        echo 'Waiting for primary to be ready...'
+        sleep 5
+      done
+      postgres -c hot_standby=on
+      "
+    volumes:
+      - postgres_shop_replica:/var/lib/postgresql/data
     depends_on:
-      postgres-voting:
+      postgres-shop-primary:
         condition: service_healthy
     networks:
       - backend
+    restart: unless-stopped
+#
+  postgres-shop-proxy:
+    image: haproxy:2.8-alpine
+    container_name: postgres-shop-proxy
+    volumes:
+      - ./haproxy-postgres-shop.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "5433:5432"
+    networks:
+      - backend
+    depends_on:
+      - postgres-shop-primary
+      - postgres-shop-replica
+    restart: unless-stopped
+#
+  # =============================
+  # POSTGRESQL WITH REPLICATION - RUMORS
+  # =============================
+
+  postgres-rumors-primary:
+    image: postgres:15
+    container_name: postgres-rumors-primary
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-voting:5432/voting_service
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: rumors_service
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_PASSWORD}
+    command: |
+      postgres 
+      -c wal_level=replica 
+      -c max_wal_senders=3 
+      -c max_replication_slots=3
+      -c hot_standby=on
+    volumes:
+      - postgres_rumors_primary:/var/lib/postgresql/data
+      - ./postgres-init/rumors-primary.sh:/docker-entrypoint-initdb.d/init.sh
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER}" ]
+      interval: 5s
+      retries: 5
+
+  postgres-rumors-replica:
+    image: postgres:15
+    container_name: postgres-rumors-replica
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    command: |
+      bash -c "
+      until pg_basebackup -h postgres-rumors-primary -D /var/lib/postgresql/data -U replicator -w -P -R; do
+        echo 'Waiting for primary to be ready...'
+        sleep 5
+      done
+      postgres -c hot_standby=on
+      "
+    volumes:
+      - postgres_rumors_replica:/var/lib/postgresql/data
+    depends_on:
+      postgres-rumors-primary:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  postgres-rumors-proxy:
+    image: haproxy:2.8-alpine
+    container_name: postgres-rumors-proxy
+    volumes:
+      - ./haproxy-postgres-rumors.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "5434:5432"
+    networks:
+      - backend
+    depends_on:
+      - postgres-rumors-primary
+      - postgres-rumors-replica
+    restart: unless-stopped
+
+  # =============================
+  # APPLICATION SERVICES (Updated to use proxies)
+  # =============================
+
+  user_service:
+    image: nadea39/user-management-service:1.10
+    deploy:
+      replicas: 1
+    environment:
+      # Connect through MongoDB proxy for automatic failover
+      - MONGO_URI=mongodb://mongo:27017/user_management?replicaSet=rs0
+      - USE_MOCKS=true
+      - PORT=3000
+      - GAME_SERVICE_URL=${GAME_SERVICE_URL}
+    depends_on:
+      - mongo
+    networks:
+      - backend
+    env_file:
+      - .env
+
+  game_service:
+    image: nadea39/gameservice:v1.0.7
+    deploy:
+      replicas: 1
+    environment:
+      # Connect through MongoDB proxy
+      - MONGO_URI=mongodb://mongo:27017/gameservice?replicaSet=rs0
+      - PORT=${PORT}
+      - NODE_ENV=${NODE_ENV}
+      - USER_SERVICE_URL=${USER_SERVICE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_ALGORITHM=${JWT_ALGORITHM}
+    depends_on:
+      - mongo
+      - user_service
+    networks:
+      - backend
+
+  townservice:
+    image: livia994/townservice:latest
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+    environment:
+      - MONGO_URI=mongodb://mongo-town:27017/townDB
+      - PORT=4001
+      - NODE_ENV=production
+    depends_on:
+      - mongo-town
+    networks:
+      - backend
+
+  characterservice:
+    image: livia994/characterservice:latest
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+    environment:
+      # Connect through MongoDB proxy
+      - MONGO_URI=mongodb://mongo-character:27017/characterDB?replicaSet=rs-character
+      - PORT=4002
+      - NODE_ENV=production
+    depends_on:
+      - mongo-character
+    networks:
+      - backend
+
+  voting-service:
+    image: vladamusin/voting_service:0.0.7
+    deploy:
+      replicas: 1
+    depends_on:
+      - postgres-voting-proxy
+    networks:
+      - backend
+    environment:
+      # Connect through PostgreSQL proxy
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-voting-proxy:5432/voting_service
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
     restart: unless-stopped
 
-  # Proxy for task-service
   task-proxy:
     image: nginx:alpine
     container_name: task-proxy
@@ -385,7 +708,7 @@ services:
   task-service:
     image: vladamusin/task_service:0.0.18
     deploy:
-      replicas: 2
+      replicas: 1
     #    container_name: task-service
     #    ports:
     #      - "8180:8180"
@@ -401,48 +724,20 @@ services:
       CHARACTER_SERVICE_URL: http://task-proxy:8000
     restart: unless-stopped
 
-  postgres-shop:
-    image: postgres:15
-    container_name: postgres-shop
-    environment:
-      POSTGRES_USER: shopuser
-      POSTGRES_PASSWORD: shoppass
-      POSTGRES_DB: shop_service
-    volumes:
-      - shop-postgres-data:/var/lib/postgresql/data # updated to match declared volume
-    ports:
-      - "5433:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shopuser"]
-      interval: 5s
-      retries: 5
-      start_period: 5s
-    networks:
-      - backend
-    restart: unless-stopped
-
   shopservice:
     image: catalinaernu/shop-service:latest
-    #container_name: shopservice
     deploy:
-      replicas: 2
-    #ports:
-    #  - "8085:8085"
+      replicas: 1
     depends_on:
-      postgres-shop:
-        condition: service_healthy
-      service_discovery:
-        condition: service_healthy
+      - postgres-shop-proxy
     environment:
       ASPNETCORE_URLS: http://+:8085
-      CONNECTION_STRING: Host=postgres-shop;Database=shop_service;Username=shopuser;Password=shoppass
+      # Connect through PostgreSQL proxy
+      CONNECTION_STRING: Host=postgres-shop-proxy;Database=shop_service;Username=shopuser;Password=shoppass
       SERVICE_DISCOVERY_URL: http://service_discovery:8500
       SERVICE_NAME: shop-service
-      #PORT: 8085
-    volumes:
-      - shop-postgres-data:/var/lib/postgresql/data # updated
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 8085 || exit 1"]
+      test: [ "CMD-SHELL", "nc -z localhost 8085 || exit 1" ]
       interval: 10s
       retries: 5
       start_period: 5s
@@ -451,98 +746,230 @@ services:
 
   roleplayservice:
     image: catalinaernu/roleplay-service:latest
-    #container_name: roleplayservice
     deploy:
-      replicas: 2
+      replicas: 1
     depends_on:
-      gateway_cache:
-        condition: service_started
-      service_discovery:
+      gateway_cache_1:
         condition: service_healthy
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8086
-      Redis__Config: gateway_cache:6379
+      Redis__Config: gateway_cache_1:6379
       CacheDefaultTtl: 15
       SERVICE_NAME: roleplay-service
-      #PORT: 8086
       SERVICE_DISCOVERY_URL: http://service_discovery:8500
     ports:
       - "8086:8086"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8086/health || exit 1"]
+      test: [ "CMD-SHELL", "curl -f http://localhost:8086/health || exit 1" ]
       interval: 10s
       retries: 5
       start_period: 5s
     networks:
       - backend
 
-  postgres-rumors:
-    container_name: postgres-rumors
-    image: postgres:15
-    environment:
-      POSTGRES_USER: "${POSTGRES_USER}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
-      POSTGRES_DB: "rumors_service"
-      PGDATA: /var/lib/postgresql/data/pgdata
-    volumes:
-      - postgres-rumors:/var/lib/postgresql/data/pgdata
-    ports:
-      - "5434:5432"
-    networks:
-      - backend
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d rumors_service"]
-      interval: 5s
-      retries: 5
-      timeout: 5s
-
-  #  communication-service:
-  #    image: "${COMM_IMAGE}"
-  ##    container_name: communication-service
-  ##    ports:
-  ##      - "${COMM_PORT}:8080"
-  #    networks:
-  #      - backend
-  #    restart: unless-stopped
-  #    # optional healthcheck to ensure app started (adjust path if you have /actuator/health)
-  #    healthcheck:
-  #      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
-  #      interval: 10s
-  #      timeout: 5s
-  #      retries: 6
-
   rumors-service:
     image: drumdrum652/rumors-service:8.0
     deploy:
-      replicas: 2
-    #    container_name: rumors-service
-    #    ports:
-    #      - "${RUMORS_PORT}:8081"
+      replicas: 1
     depends_on:
-      postgres-rumors:
-        condition: service_healthy
+      - postgres-rumors-proxy
     networks:
       - backend
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-rumors:5432/rumors_service
+      # Connect through PostgreSQL proxy
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-rumors-proxy:5432/rumors_service
       SPRING_DATASOURCE_USERNAME: "${POSTGRES_USER}"
       SPRING_DATASOURCE_PASSWORD: "${POSTGRES_PASSWORD}"
     restart: unless-stopped
 
+
+  # =============================
+  # DATA WAREHOUSE - PostgreSQL
+  # =============================
+#
+  postgres-warehouse:
+    image: postgres:15
+    container_name: postgres-warehouse
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: data_warehouse
+      PGDATA: /data/postgres
+    volumes:
+      - postgres_warehouse:/data/postgres
+      - ./warehouse-init:/docker-entrypoint-initdb.d
+    ports:
+      - "5445:5432"
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER}" ]
+      interval: 5s
+      retries: 5
+      timeout: 5s
+#
+  # =============================
+  # ETL SERVICE (Apache Airflow)
+  # =============================
+#
+  airflow-postgres:
+    image: postgres:15
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_postgres:/var/lib/postgresql/data
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U airflow" ]
+      interval: 5s
+      retries: 5
+#
+  airflow-init:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: airflow-init
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-'81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs='}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+    networks:
+      - backend
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com \
+          --password admin
+    restart: "no"
+#
+  airflow-webserver:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: airflow-webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres-warehouse:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-'81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs='}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-'your-secret-key-here'}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/requirements.txt:/requirements.txt
+    ports:
+      - "8080:8080"
+    networks:
+      - backend
+    restart: unless-stopped
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        pip install --no-cache-dir -r /requirements.txt
+        exec airflow webserver
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+#
+  airflow-scheduler:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: airflow-scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-'81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs='}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+#
+      # Connection strings for source databases
+      MONGO_PRIMARY_URI: mongodb://mongo:27017
+      MONGO_TOWN_URI: mongodb://mongo-town:27017/townDB
+      MONGO_CHARACTER_URI: mongodb://mongo-character:27017
+      POSTGRES_VOTING_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-voting-proxy:5432/voting_service
+      POSTGRES_TASK_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-task:5432/task_service
+      POSTGRES_RUMORS_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-rumors-proxy:5432/rumors_service
+      WAREHOUSE_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-warehouse:5432/data_warehouse
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/requirements.txt:/requirements.txt
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        pip install --no-cache-dir -r /requirements.txt
+        exec airflow scheduler
+    networks:
+      - backend
+    restart: unless-stopped
+#
+  # =============================
+  # METABASE - Data Visualization
+  # =============================
+#
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase
+    depends_on:
+      postgres-warehouse:
+        condition: service_healthy
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase
+      MB_DB_PORT: 5432
+      MB_DB_USER: ${POSTGRES_USER}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
+      MB_DB_HOST: postgres-warehouse
+    ports:
+      - "3001:3000"
+    networks:
+      - backend
+    restart: unless-stopped
+    volumes:
+      - metabase_data:/metabase-data
+#
   pgadmin:
-    #    container_name: pgadmin
     image: dpage/pgadmin4
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
       PGADMIN_CONFIG_SERVER_MODE: "False"
-    #    ports:
-    #      - "5050:80"
+    ports:
+      - "5050:80"   # host:container
     networks:
       - backend
     restart: unless-stopped
+
 
 networks:
   backend:
@@ -553,10 +980,25 @@ volumes:
     driver: local
   filebeat_data:
     driver: local
-  mongo_data:
+  # MongoDB volumes - Primary
+  mongo_primary_data:
+  mongo_secondary_1_data:
+  # MongoDB Town volumes
   mongo-town-data:
-  mongo-character-data:
-  postgres-voting:
+  # MongoDB Character volumes
+  mongo_character_primary_data:
+  mongo_character_secondary_1_data:
+  # PostgreSQL Voting volumes
+  postgres_voting_primary:
+  postgres_voting_replica:
+  # PostgreSQL Task volumes
   postgres-task:
-  shop-postgres-data:
-  postgres-rumors:
+  # PostgreSQL Shop volumes
+  postgres_shop_primary:
+  postgres_shop_replica:
+  # PostgreSQL Rumors volumes
+  postgres_rumors_primary:
+  postgres_rumors_replica:
+  postgres_warehouse:
+  airflow_postgres:
+  metabase_data:

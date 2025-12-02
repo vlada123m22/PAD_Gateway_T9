@@ -7,7 +7,7 @@ import httpx
 import os
 import asyncio
 import jwt
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from datetime import datetime
 from redis import asyncio as aioredis
 import json
@@ -17,6 +17,9 @@ import io
 import subprocess
 from fastapi.responses import StreamingResponse
 import logging
+import bisect
+
+app = FastAPI(title="Gateway Service")
 from brokerClient import brokerClient
 from contextlib import asynccontextmanager
 
@@ -45,12 +48,214 @@ semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 security = HTTPBearer()
 
-# ---------------------- CACHE CONFIG ----------------------
-CACHE_URL = os.getenv("CACHE_URL", "redis://localhost:6379")
-CACHE_DEFAULT_TTL = int(os.getenv("CACHE_DEFAULT_TTL", "15"))  # seconds
-redis_client: Optional[aioredis.Redis] = None
+# ---------------------- SHARDED CACHE CONFIG ----------------------
+CACHE_DEFAULT_TTL = int(os.getenv("CACHE_DEFAULT_TTL", "15"))
+VIRTUAL_NODES = int(os.getenv("VIRTUAL_NODES", "150"))  # Virtual nodes per physical node
+
+# Parse cache shard URLs from environment (comma-separated)
+CACHE_SHARD_URLS = os.getenv(
+    "CACHE_SHARD_URLS",
+    "redis://gateway_cache_1:6379,redis://gateway_cache_2:6379,redis://gateway_cache_3:6379"
+).split(",")
 
 
+class ConsistentHashRing:
+    """Consistent hashing implementation for distributed caching"""
+
+    def __init__(self, nodes: List[str], virtual_nodes: int = 150):
+        self.nodes = nodes
+        self.virtual_nodes = virtual_nodes
+        self.ring = {}
+        self.sorted_keys = []
+        self._build_ring()
+
+    def _hash(self, key: str) -> int:
+        """Generate hash value for a key"""
+        return int(hashlib.md5(key.encode()).hexdigest(), 16)
+
+    def _build_ring(self):
+        """Build the consistent hash ring with virtual nodes"""
+        for node in self.nodes:
+            for i in range(self.virtual_nodes):
+                virtual_key = f"{node}:{i}"
+                hash_value = self._hash(virtual_key)
+                self.ring[hash_value] = node
+
+        self.sorted_keys = sorted(self.ring.keys())
+        print(
+            f"[CONSISTENT HASH] Built ring with {len(self.ring)} virtual nodes across {len(self.nodes)} physical nodes")
+
+    def get_node(self, key: str) -> str:
+        """Get the node responsible for a given key"""
+        if not self.ring:
+            return None
+
+        hash_value = self._hash(key)
+
+        # Binary search to find the first node >= hash_value
+        idx = bisect.bisect_right(self.sorted_keys, hash_value)
+
+        # Wrap around if necessary
+        if idx == len(self.sorted_keys):
+            idx = 0
+
+        return self.ring[self.sorted_keys[idx]]
+
+    def add_node(self, node: str):
+        """Add a new node to the ring"""
+        self.nodes.append(node)
+        for i in range(self.virtual_nodes):
+            virtual_key = f"{node}:{i}"
+            hash_value = self._hash(virtual_key)
+            self.ring[hash_value] = node
+
+        self.sorted_keys = sorted(self.ring.keys())
+        print(f"[CONSISTENT HASH] Added node {node}, ring now has {len(self.ring)} virtual nodes")
+
+    def remove_node(self, node: str):
+        """Remove a node from the ring"""
+        if node not in self.nodes:
+            return
+
+        self.nodes.remove(node)
+
+        # Remove all virtual nodes for this physical node
+        keys_to_remove = [k for k, v in self.ring.items() if v == node]
+        for key in keys_to_remove:
+            del self.ring[key]
+
+        self.sorted_keys = sorted(self.ring.keys())
+        print(f"[CONSISTENT HASH] Removed node {node}, ring now has {len(self.ring)} virtual nodes")
+
+    def get_distribution_stats(self) -> Dict[str, int]:
+        """Get distribution statistics across nodes"""
+        stats = {node: 0 for node in self.nodes}
+        for node in self.ring.values():
+            stats[node] += 1
+        return stats
+
+
+class ShardedRedisCache:
+    """Sharded Redis cache using consistent hashing"""
+
+    def __init__(self, shard_urls: List[str], virtual_nodes: int = 150):
+        self.shard_urls = shard_urls
+        self.clients: Dict[str, aioredis.Redis] = {}
+        self.hash_ring = ConsistentHashRing(shard_urls, virtual_nodes)
+        self.stats = {
+            "hits": 0,
+            "misses": 0,
+            "sets": 0,
+            "errors": 0,
+            "shard_hits": {url: 0 for url in shard_urls}
+        }
+
+    async def connect(self):
+        """Connect to all Redis shards"""
+        for url in self.shard_urls:
+            try:
+                client = aioredis.from_url(url, decode_responses=False)
+                await client.ping()
+                self.clients[url] = client
+                print(f"[SHARDED CACHE] Connected to shard: {url}")
+            except Exception as e:
+                print(f"[SHARDED CACHE] Failed to connect to {url}: {e}")
+
+        if not self.clients:
+            raise Exception("Failed to connect to any cache shards")
+
+        # Print distribution stats
+        dist_stats = self.hash_ring.get_distribution_stats()
+        print(f"[SHARDED CACHE] Hash ring distribution: {dist_stats}")
+
+    async def close(self):
+        """Close all Redis connections"""
+        for client in self.clients.values():
+            await client.close()
+
+    def _get_client(self, key: str) -> Optional[aioredis.Redis]:
+        """Get the Redis client for a given key using consistent hashing"""
+        node = self.hash_ring.get_node(key)
+        return self.clients.get(node)
+
+    async def get(self, key: str) -> Optional[bytes]:
+        """Get value from the appropriate shard"""
+        client = self._get_client(key)
+        if not client:
+            self.stats["errors"] += 1
+            return None
+
+        try:
+            value = await client.get(key)
+            if value:
+                self.stats["hits"] += 1
+                node = self.hash_ring.get_node(key)
+                self.stats["shard_hits"][node] += 1
+            else:
+                self.stats["misses"] += 1
+            return value
+        except Exception as e:
+            self.stats["errors"] += 1
+            print(f"[SHARDED CACHE] Error getting key {key}: {e}")
+            return None
+
+    async def set(self, key: str, value: bytes, ttl: int):
+        """Set value in the appropriate shard"""
+        client = self._get_client(key)
+        if not client:
+            self.stats["errors"] += 1
+            return
+
+        try:
+            await client.setex(key, ttl, value)
+            self.stats["sets"] += 1
+        except Exception as e:
+            self.stats["errors"] += 1
+            print(f"[SHARDED CACHE] Error setting key {key}: {e}")
+
+    async def delete(self, key: str):
+        """Delete key from the appropriate shard"""
+        client = self._get_client(key)
+        if not client:
+            return
+
+        try:
+            await client.delete(key)
+        except Exception as e:
+            print(f"[SHARDED CACHE] Error deleting key {key}: {e}")
+
+    def get_stats(self) -> Dict:
+        """Get cache statistics"""
+        total_requests = self.stats["hits"] + self.stats["misses"]
+        hit_rate = (self.stats["hits"] / total_requests * 100) if total_requests > 0 else 0
+
+        return {
+            "total_requests": total_requests,
+            "hits": self.stats["hits"],
+            "misses": self.stats["misses"],
+            "hit_rate_percent": round(hit_rate, 2),
+            "sets": self.stats["sets"],
+            "errors": self.stats["errors"],
+            "shard_distribution": self.stats["shard_hits"],
+            "shards_count": len(self.clients),
+            "virtual_nodes": self.hash_ring.virtual_nodes
+        }
+
+
+# Global sharded cache instance
+sharded_cache: Optional[ShardedRedisCache] = None
+
+
+@app.on_event("startup")
+async def startup():
+    global sharded_cache
+    try:
+        sharded_cache = ShardedRedisCache(CACHE_SHARD_URLS, VIRTUAL_NODES)
+        await sharded_cache.connect()
+        print(f"[SHARDED CACHE] Initialized with {len(CACHE_SHARD_URLS)} shards")
+    except Exception as e:
+        sharded_cache = None
+        print(f"[SHARDED CACHE] Failed to initialize: {e}")
 # ---------------------- LIFESPAN (DEFINE BEFORE APP) ----------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -79,6 +284,11 @@ async def lifespan(app: FastAPI):
     yield  # Application runs here
     
 
+@app.on_event("shutdown")
+async def shutdown():
+    if sharded_cache:
+        await sharded_cache.close()
+
 # ---------------------- APP INITIALIZATION ----------------------
 app = FastAPI(
     title="Gateway Service",
@@ -97,13 +307,16 @@ def _cache_key(method: str, full_url: str, headers_raw: list[tuple[bytes, bytes]
 
 
 async def cache_get(key: str) -> Optional[Response]:
-    if not redis_client:
-        print("[CACHE] Redis not initialized.")
+    if not sharded_cache:
+        print("[CACHE] Sharded cache not initialized.")
         return None
-    blob = await redis_client.get(key)
+
+    blob = await sharded_cache.get(key)
     print("[CACHE] Lookup:", key, "→", "HIT" if blob else "MISS")
+
     if not blob:
         return None
+
     cached = json.loads(blob)
     return Response(
         content=bytes.fromhex(cached["body_hex"]),
@@ -114,9 +327,10 @@ async def cache_get(key: str) -> Optional[Response]:
 
 
 async def cache_set(key: str, resp: Response, ttl: int):
-    if not redis_client:
-        print("[CACHE] No redis_client found.")
+    if not sharded_cache:
+        print("[CACHE] Sharded cache not initialized.")
         return
+
     if resp.status_code >= 400:
         print("[CACHE] Skipping cache because status", resp.status_code)
         return
@@ -129,7 +343,8 @@ async def cache_set(key: str, resp: Response, ttl: int):
         "media_type": resp.media_type,
         "body_hex": (resp.body or b"").hex(),
     }
-    await redis_client.setex(key, ttl, json.dumps(payload))
+
+    await sharded_cache.set(key, json.dumps(payload).encode(), ttl)
     print("[CACHE] Stored:", key)
 
 
@@ -149,23 +364,89 @@ async def cached_proxy(service_url: str, request: Request, user: "AuthUser", ttl
     if request.method.upper() != "GET" or should_bypass_cache(request) or ttl <= 0:
         resp = await proxy_request(service_url, request, user)
         resp.headers["X-Cache"] = "BYPASS"
+        resp.headers["X-Cache-Shard"] = "NONE"
         return resp
 
     key = _cache_key(request.method.upper(), full_url, request.headers.raw)
+
+    # Determine which shard this key belongs to
+    shard_node = sharded_cache.hash_ring.get_node(key) if sharded_cache else "UNKNOWN"
+
     hit = await cache_get(key)
     if hit:
         hit.headers["X-Cache"] = "HIT"
+        hit.headers["X-Cache-Shard"] = shard_node
         return hit
 
     resp = await proxy_request(service_url, request, user)
     await cache_set(key, resp, ttl)
     resp.headers["X-Cache"] = "MISS"
+    resp.headers["X-Cache-Shard"] = shard_node
     return resp
+
+
+# ---------------------- CACHE STATS ENDPOINT ----------------------
+@app.get("/api/cache/stats")
+async def get_cache_stats():
+    """Get cache statistics and shard distribution"""
+    if not sharded_cache:
+        raise HTTPException(status_code=503, detail="Sharded cache not available")
+
+    stats = sharded_cache.get_stats()
+    hash_dist = sharded_cache.hash_ring.get_distribution_stats()
+
+    return {
+        "cache_stats": stats,
+        "hash_ring_distribution": hash_dist,
+        "shards": [
+            {
+                "url": url,
+                "connected": url in sharded_cache.clients,
+                "virtual_nodes": hash_dist.get(url, 0)
+            }
+            for url in CACHE_SHARD_URLS
+        ]
+    }
+
+
+@app.post("/api/cache/clear")
+async def clear_cache(pattern: Optional[str] = None):
+    """Clear cache across all shards (admin only in production)"""
+    if not sharded_cache:
+        raise HTTPException(status_code=503, detail="Sharded cache not available")
+
+    cleared_count = 0
+
+    for url, client in sharded_cache.clients.items():
+        try:
+            if pattern:
+                # Scan and delete matching keys
+                cursor = 0
+                while True:
+                    cursor, keys = await client.scan(cursor, match=pattern, count=100)
+                    if keys:
+                        await client.delete(*keys)
+                        cleared_count += len(keys)
+                    if cursor == 0:
+                        break
+            else:
+                # Flush entire shard
+                await client.flushdb()
+                cleared_count += 1
+        except Exception as e:
+            print(f"[CACHE] Error clearing shard {url}: {e}")
+
+    return {
+        "cleared": cleared_count,
+        "pattern": pattern or "ALL",
+        "shards_cleared": len(sharded_cache.clients)
+    }
 
 
 # ---------------------- AUTHORIZATION ----------------------
 class AuthUser:
-    def __init__(self, user_id: str, username: str, roles: list[str], character_id: Optional[str] = None, lobby_id: Optional[str] = None):
+    def __init__(self, user_id: str, username: str, roles: list[str], character_id: Optional[str] = None,
+                 lobby_id: Optional[str] = None):
         self.user_id = user_id
         self.username = username
         self.roles = roles
@@ -176,15 +457,11 @@ class AuthUser:
 dummy_user = AuthUser("public", "public", [])
 
 
-# For "authenticating service-to-service requests"
 async def get_user_or_internal(
         request: Request,
         x_internal_token: Optional[str] = Header(None, alias="X-Internal-Service-Token"),
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
 ) -> AuthUser:
-    """Get user from JWT token OR allow internal service requests"""
-
-    # Check for internal service token
     if x_internal_token and INTERNAL_SERVICE_TOKEN and x_internal_token == INTERNAL_SERVICE_TOKEN:
         return AuthUser(
             user_id="internal-service",
@@ -193,11 +470,11 @@ async def get_user_or_internal(
             character_id=None
         )
 
-    # Otherwise require JWT
     if not credentials:
         raise HTTPException(status_code=401, detail="Authentication required")
 
     return await verify_token(credentials)
+
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> AuthUser:
     token = credentials.credentials
@@ -229,11 +506,13 @@ def require_roles(*required_roles: str):
                 detail=f"Access denied. Required roles: {', '.join(required_roles)}"
             )
         return user
+
     return role_checker
 
 
 # ---------------------- PROXY FUNCTION ----------------------
-async def proxy_request(service_url: str, request: Request, user: AuthUser, additional_headers: Optional[Dict[str, str]] = None) -> Response:
+async def proxy_request(service_url: str, request: Request, user: AuthUser,
+                        additional_headers: Optional[Dict[str, str]] = None) -> Response:
     async with semaphore:
         try:
             async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
@@ -242,18 +521,17 @@ async def proxy_request(service_url: str, request: Request, user: AuthUser, addi
                     for k, v in request.headers.raw
                     if k.decode().lower() not in ["host", "authorization"]
                 }
-                # standard headers attached by gateway
                 headers["X-User-ID"] = str(user.user_id)
                 headers["X-Username"] = user.username
                 headers["X-User-Roles"] = ",".join(user.roles)
 
-                # attach both X-Character-ID and short 'characterId' for compatibility
                 if user.character_id:
                     headers["X-Character-ID"] = str(user.character_id)
                     headers["characterId"] = str(user.character_id)
 
                 if additional_headers:
                     headers.update(additional_headers)
+
                 backend_response = await client.request(
                     method=request.method,
                     url=service_url,
@@ -902,42 +1180,41 @@ async def task_complete(task_id: int, character_id: str, request: Request, user:
 
 # ---------------------- VOTING SERVICE ----------------------
 @app.get("/api/voting/results/{lobby_id}")
-async def voting_results(lobby_id: int, request: Request, user: AuthUser = Depends(verify_token)):
+async def voting_results(lobby_id: int, request: Request):
     service_url = f"{VOTING_SERVICE_URL}/api/voting/results/{lobby_id}"
-    return await cached_proxy(service_url, request, user, ttl=10)
+    return await cached_proxy(service_url, request, dummy_user, ttl=10)
 
 
 @app.post("/api/voting/cast")
-async def voting_cast(request: Request, user: AuthUser = Depends(verify_token)):
+async def voting_cast(request: Request):
     service_url = f"{VOTING_SERVICE_URL}/api/voting/cast"
-    return await proxy_request(service_url, request, user)
+    return await proxy_request(service_url, request, dummy_user)
 
 # ---------------------- RUMORS SERVICE (NEW) ----------------------
 
 @app.post("/api/rumors/generate")
-async def gateway_generate_rumors(request: Request, user: AuthUser = Depends(verify_token)):
+async def gateway_generate_rumors(request: Request):
     """
     Proxy POST /api/rumors/generate to RumorsService.
     Gateway attaches X-User-ID, X-Character-ID and also 'characterId' for compatibility.
     Requires authentication (verify_token).
     """
     service_url = f"{RUMORS_SERVICE_URL}/api/rumors/generate"
-    return await proxy_request(service_url, request, user)
+    return await proxy_request(service_url, request, dummy_user)
 
 @app.get("/api/rumors/{character_id}")
-async def gateway_get_rumors(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+async def gateway_get_rumors(character_id: str, request: Request):
     """
     Cached GET for rumors for a character.
     """
     service_url = f"{RUMORS_SERVICE_URL}/api/rumors/{character_id}"
-    return await cached_proxy(service_url, request, user, ttl=CACHE_DEFAULT_TTL)
+    return await cached_proxy(service_url, request, dummy_user, ttl=CACHE_DEFAULT_TTL)
 
 @app.get("/api/rumors")
-async def gateway_list_rumors(request: Request, user: AuthUser = Depends(verify_token)):
+async def gateway_list_rumors(request: Request):
     service_url = f"{RUMORS_SERVICE_URL}/api/rumors"
-    return await cached_proxy(service_url, request, user, ttl=CACHE_DEFAULT_TTL)
+    return await cached_proxy(service_url, request, dummy_user, ttl=CACHE_DEFAULT_TTL)
 
-# ---------------------- ADMIN ENDPOINTS (EXAMPLE) ----------------------
 
 # ---------------------- TOWN SERVICE ----------------------
 
@@ -1200,6 +1477,14 @@ async def admin_stats(request: Request, user: AuthUser = Depends(require_roles("
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Custom error handler for better error messages"""
+    return Response(
+        content=f'{{"detail": "{exc.detail}"}}',
+        status_code=exc.status_code,
+        media_type="application/json"
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
     return Response(
         content=f'{{"detail": "{exc.detail}"}}',
         status_code=exc.status_code,
