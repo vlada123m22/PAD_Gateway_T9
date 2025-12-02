@@ -1,6 +1,7 @@
+from uuid import uuid4
 from fastapi import Header
 from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import httpx
 import os
@@ -19,8 +20,14 @@ import logging
 import bisect
 
 app = FastAPI(title="Gateway Service")
+from brokerClient import brokerClient
+from contextlib import asynccontextmanager
 
 # ---------------------- CONFIG ----------------------
+BROKER_URL = os.getenv("BROKER_URL", "http://localhost:8001")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "gateway-service")
+BACKEND_TIMEOUT = 5
+
 TASK_SERVICE_URL = os.getenv("TASK_SERVICE_URL", "http://localhost:8180")
 VOTING_SERVICE_URL = os.getenv("VOTING_SERVICE_URL", "http://localhost:8181")
 USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:3000")
@@ -36,7 +43,6 @@ JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "")
 
-BACKEND_TIMEOUT = 5
 MAX_CONCURRENT_TASKS = 10
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
@@ -250,13 +256,44 @@ async def startup():
     except Exception as e:
         sharded_cache = None
         print(f"[SHARDED CACHE] Failed to initialize: {e}")
+# ---------------------- LIFESPAN (DEFINE BEFORE APP) ----------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown"""
+    global redis_client
+    
+    # Startup
+    print("[GATEWAY] Starting up...")
+    
+    # Redis
+    try:
+        redis_client = aioredis.from_url(CACHE_URL, decode_responses=False)
+        await redis_client.ping()
+        print("[REDIS] Connected successfully")
+    except Exception as e:
+        print(f"[REDIS] NOT connected: {e}")
+        redis_client = None
 
+    # Custom Message Broker
+    try:
+        await brokerClient.connect()
+        print("[BROKER] Connected successfully")
+    except Exception as e:
+        print(f"[BROKER] Connection failed: {e}")
+    
+    yield  # Application runs here
+    
 
 @app.on_event("shutdown")
 async def shutdown():
     if sharded_cache:
         await sharded_cache.close()
 
+# ---------------------- APP INITIALIZATION ----------------------
+app = FastAPI(
+    title="Gateway Service",
+    lifespan=lifespan
+)
 
 # ---------------------- CACHE HELPERS ----------------------
 def _cache_key(method: str, full_url: str, headers_raw: list[tuple[bytes, bytes]]) -> str:
@@ -514,102 +551,608 @@ async def proxy_request(service_url: str, request: Request, user: AuthUser,
             raise HTTPException(status_code=504, detail="Gateway Timeout")
 
 
-# ---------------------- SERVICE ENDPOINTS ----------------------
+def get_running_services():
+    """
+    Automatically discover all running Docker services.
+    Returns a dict of service_name -> list of container_ids
+    """
+    try:
+        # Get all running containers with their names
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        if result.returncode != 0:
+            return {}
+
+        container_names = [name.strip() for name in result.stdout.strip().split('\n') if name.strip()]
+
+        # Group containers by service name
+        services = {}
+        for container_name in container_names:
+            # Try to extract service name (handle different naming patterns)
+            # Pattern 1: service_name_replica_1 -> service_name
+            # Pattern 2: service-name-1 -> service-name
+            # Pattern 3: service_name -> service_name
+
+            # Remove common suffixes like _1, -1, _replica_1, etc.
+            import re
+            service_name = re.sub(r'[-_](replica[-_])?\d+$', '', container_name)
+
+            # If no suffix was found, use the full container name as service name
+            if service_name == container_name or not service_name:
+                service_name = container_name
+
+            if service_name not in services:
+                services[service_name] = []
+
+            services[service_name].append(container_name)
+
+        return services
+
+    except Exception as e:
+        print(f"Error discovering services: {e}")
+        return {}
+
+
+def get_container_ids_for_service(service_name: str):
+    try:
+        # Try exact name match first
+        result = subprocess.run(
+            ["docker", "ps", "-q", "-f", f"name={service_name}"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        container_ids = [cid.strip() for cid in result.stdout.strip().split('\n') if cid.strip()]
+        return container_ids
+
+    except Exception as e:
+        print(f"Error getting container IDs for {service_name}: {e}")
+        return []
+
+
+@app.get("/api/logs/download")
+async def download_logs(
+    request: Request,
+    # Remove user parameter entirely
+    services: Optional[str] = None,
+    lines: int = 1000,
+    since: Optional[str] = None
+):
+    # Limit lines to prevent huge downloads
+    lines = min(lines, 10000)
+
+    # Auto-discover all running services
+    all_services = get_running_services()
+
+    if not all_services:
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to discover running services. Is Docker accessible?"
+        )
+
+    # Determine which services to fetch
+    if services:
+        requested_services = [s.strip() for s in services.split(",")]
+        services_to_fetch = {}
+
+        for req_service in requested_services:
+            # Try exact match first
+            if req_service in all_services:
+                services_to_fetch[req_service] = all_services[req_service]
+            else:
+                # Try partial match (case-insensitive)
+                matches = {k: v for k, v in all_services.items()
+                           if req_service.lower() in k.lower()}
+                if matches:
+                    services_to_fetch.update(matches)
+
+        if not services_to_fetch:
+            available = ', '.join(all_services.keys())
+            raise HTTPException(
+                status_code=400,
+                detail=f"No matching services found. Available services: {available}"
+            )
+    else:
+        services_to_fetch = all_services
+
+    # Create ZIP file in memory
+    zip_buffer = io.BytesIO()
+
+    try:
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # Add metadata file
+            metadata = f"""Log Export
+Generated: {datetime.utcnow().isoformat()}
+Services: {', '.join(services_to_fetch.keys())}
+Total containers: {sum(len(containers) for containers in services_to_fetch.values())}
+Lines per container: {lines}
+Since: {since if since else 'All available logs'}
+"""
+            zip_file.writestr("_metadata.txt", metadata)
+
+            # Fetch logs from each service
+            for service_name, container_names in services_to_fetch.items():
+                try:
+                    # Get container IDs for this service
+                    container_ids = get_container_ids_for_service(service_name)
+
+                    if not container_ids:
+                        zip_file.writestr(
+                            f"{service_name}.log",
+                            f"Service '{service_name}' has no running containers.\n"
+                        )
+                        continue
+
+                    # Fetch logs from each container/replica
+                    for idx, container_id in enumerate(container_ids):
+                        try:
+                            # Build docker logs command
+                            cmd = ["docker", "logs"]
+
+                            if since:
+                                cmd.extend(["--since", since])
+
+                            cmd.extend(["--tail", str(lines), container_id])
+
+                            result = subprocess.run(
+                                cmd,
+                                capture_output=True,
+                                text=True,
+                                timeout=30
+                            )
+
+                            # Combine stdout and stderr
+                            logs = result.stdout + result.stderr
+
+                            if not logs:
+                                logs = f"No logs available for {service_name} (container: {container_id})\n"
+
+                            # Save to ZIP with replica number if multiple containers
+                            if len(container_ids) > 1:
+                                filename = f"{service_name}_replica_{idx + 1}.log"
+                            else:
+                                filename = f"{service_name}.log"
+
+                            zip_file.writestr(filename, logs)
+
+                        except subprocess.TimeoutExpired:
+                            zip_file.writestr(
+                                f"{service_name}_replica_{idx + 1}.log",
+                                f"Error: Timeout fetching logs for container {container_id}\n"
+                            )
+                        except Exception as e:
+                            zip_file.writestr(
+                                f"{service_name}_replica_{idx + 1}.log",
+                                f"Error: {str(e)}\n"
+                            )
+
+                except Exception as e:
+                    zip_file.writestr(
+                        f"{service_name}.log",
+                        f"Error fetching logs for service '{service_name}': {str(e)}\n"
+                    )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate logs archive: {str(e)}"
+        )
+
+    # Prepare ZIP for download
+    zip_buffer.seek(0)
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"system_logs_{timestamp}.zip"
+
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "X-Log-Services": ",".join(services_to_fetch.keys()),
+            "X-Log-Containers": str(sum(len(c) for c in services_to_fetch.values())),
+            "X-Log-Lines": str(lines)
+        }
+    )
+
+@app.get("/api/logs/services")  # Changed path
+async def list_log_services(
+    request: Request
+    # Remove user parameter
+):
+    try:
+        # Auto-discover services
+        services_dict = get_running_services()
+
+        if not services_dict:
+            return {
+                "services": [],
+                "total_services": 0,
+                "total_containers": 0,
+                "message": "No running services found or Docker is not accessible"
+            }
+
+        # Get detailed info for each service
+        services_list = []
+        for service_name, container_names in services_dict.items():
+            # Get container IDs
+            container_ids = get_container_ids_for_service(service_name)
+
+            # Get status for each container
+            containers_info = []
+            for container_name in container_names:
+                try:
+                    # Get container status
+                    result = subprocess.run(
+                        ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+                    status = result.stdout.strip() if result.returncode == 0 else "unknown"
+                except:
+                    status = "unknown"
+
+                containers_info.append({
+                    "name": container_name,
+                    "status": status
+                })
+
+            services_list.append({
+                "name": service_name,
+                "replica_count": len(container_names),
+                "containers": containers_info
+            })
+
+        # Sort by service name
+        services_list.sort(key=lambda x: x["name"])
+
+        return {
+            "services": services_list,
+            "total_services": len(services_list),
+            "total_containers": sum(s["replica_count"] for s in services_list)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list services: {str(e)}"
+        )
+
 
 # ---------------------- USER SERVICE ----------------------
 @app.post("/api/users")
 async def create_user(request: Request):
-    """Create user - public endpoint"""
-    service_url = f"{USER_SERVICE_URL}/users"
-    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
-        backend_response = await client.request(
-            method=request.method,
-            url=service_url,
-            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
-            params=request.query_params,
-            content=await request.body(),
-        )
-        return Response(
-            content=backend_response.content,
-            status_code=backend_response.status_code,
-            headers=dict(backend_response.headers),
-            media_type=backend_response.headers.get("content-type"),
-        )
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
 
+    message = {
+        "type": "CREATE_USER",
+        "data": payload,
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.user-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.get("/api/users")
 async def get_users(request: Request):
-    """Get all users - cached"""
-    service_url = f"{USER_SERVICE_URL}/users"
-    return await cached_proxy(service_url, request, dummy_user, ttl=15)
+    message = {
+        "type": "GET_USERS",
+        "data": {},
+        "metadata": {"request_id": str(uuid4())}
+    }
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.user-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    return Response(
+        content=json.dumps(response.get("data", [])),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 
 @app.get("/api/users/{user_id}")
-async def get_user(user_id: str, request: Request):
-    """Get user by ID - cached"""
-    service_url = f"{USER_SERVICE_URL}/users/{user_id}"
-    return await cached_proxy(service_url, request, dummy_user, ttl=15)
+async def get_user(user_id: str):
+    payload = {
+        "type": "GET_USER_BY_ID",
+        "data": { "id": user_id }
+    }
+    response = await brokerClient.publish_and_wait(
+        "gateway.user-service.request",
+        payload,
+        timeout=5
+    )
+    return JSONResponse(
+        status_code=response["status_code"],
+        content=response["data"]
+    )
 
 
 # ---------------------- GAME SERVICE ----------------------
 @app.post("/api/lobbies")
 async def create_lobby(request: Request):
-    service_url = f"{GAME_SERVICE_URL}/lobbies"
-    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
-        backend_response = await client.request(
-            method=request.method,
-            url=service_url,
-            headers={k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"},
-            params=request.query_params,
-            content=await request.body(),
-        )
-        return Response(
-            content=backend_response.content,
-            status_code=backend_response.status_code,
-            headers=dict(backend_response.headers),
-            media_type=backend_response.headers.get("content-type"),
-        )
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
 
+    message = {
+        "type": "CREATE_LOBBY",
+        "data": payload,
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.get("/api/lobbies")
 async def get_lobbies(request: Request):
-    """Get all lobbies - cached"""
-    service_url = f"{GAME_SERVICE_URL}/lobbies"
-    return await cached_proxy(service_url, request, dummy_user, ttl=10)
+    message = {
+        "type": "GET_LOBBIES",
+        "data": {},
+        "metadata": {"request_id": str(uuid4())}
+    }
+    
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    
+    return Response(
+        content=json.dumps(response.get("data", [])),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
+@app.get("/api/lobbies/{lobby_id}")
+async def get_lobby(lobby_id: str, user: AuthUser = Depends(verify_token)):
+    message = {
+        "type": "GET_LOBBY",
+        "data": {"lobby_id": lobby_id, "user_id": user.id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+    
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.post("/api/lobbies/{lobby_id}/join")
 async def join_lobby(lobby_id: str, request: Request):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/join"
-    async with httpx.AsyncClient(timeout=BACKEND_TIMEOUT) as client:
-        headers = {k.decode(): v.decode() for k, v in request.headers.raw if k.decode().lower() != "host"}
-        headers["X-Lobby-ID"] = lobby_id
-        backend_response = await client.request(
-            method=request.method,
-            url=service_url,
-            headers=headers,
-            params=request.query_params,
-            content=await request.body(),
-        )
-        return Response(
-            content=backend_response.content,
-            status_code=backend_response.status_code,
-            headers=dict(backend_response.headers),
-            media_type=backend_response.headers.get("content-type"),
-        )
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
 
+    message = {
+        "type": "JOIN_LOBBY",
+        "data": {**payload, "lobby_id": lobby_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
 
-@app.get("/api/lobbies/{lobby_id}")
-async def get_lobby(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    """Get lobby info - cached and authenticated"""
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}"
-    return await cached_proxy(service_url, request, user, ttl=10)
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
 
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
+
+@app.post("/api/lobbies/{lobby_id}/start")
+async def start_game(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+
+    message = {
+        "type": "START_GAME",
+        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 @app.patch("/api/lobbies/{lobby_id}/state")
 async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{GAME_SERVICE_URL}/lobbies/{lobby_id}/state"
-    return await proxy_request(service_url, request, user)
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
+
+    message = {
+        "type": "UPDATE_LOBBY_STATE",
+        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
+
+
+@app.get("/api/lobbies/{lobby_id}/character/{character_id}")
+async def get_character(lobby_id: str, character_id: str, user: AuthUser = Depends(verify_token)):
+    message = {
+        "type": "GET_CHARACTER",
+        "data": {
+            "lobby_id": lobby_id,
+            "character_id": character_id,
+            "user_id": user.id
+        },
+        "metadata": {"request_id": str(uuid4())}
+    }
+    
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
+
+
+@app.get("/api/lobbies/{lobby_id}/phase")
+async def get_phase(lobby_id: str, user: AuthUser = Depends(verify_token)):
+    message = {
+        "type": "GET_PHASE",
+        "data": {"lobby_id": lobby_id, "user_id": user.id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+    
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+    
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
+
+@app.post("/api/lobbies/{lobby_id}/phase/next")
+async def force_phase(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+
+    message = {
+        "type": "FORCE_PHASE",
+        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
+
+@app.post("/api/lobbies/{lobby_id}/announcement")
+async def send_announcement(lobby_id: str, request: Request):
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
+
+    message = {
+        "type": "SEND_ANNOUNCEMENT",
+        "data": {**payload, "lobby_id": lobby_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
+
+@app.get("/api/lobbies/character/{target_id}/role")
+async def get_character_role(target_id: str):
+    message = {
+        "type": "GET_CHARACTER_ROLE",
+        "data": {"target_id": target_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
+
+@app.post("/api/lobbies/character/{target_id}/status")
+async def update_character_status(target_id: str, request: Request):
+    body_bytes = await request.body()
+    payload = json.loads(body_bytes.decode("utf-8"))
+
+    message = {
+        "type": "UPDATE_CHARACTER_STATUS",
+        "data": {**payload, "target_id": target_id},
+        "metadata": {"request_id": str(uuid4())}
+    }
+
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT
+    )
+
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json"
+    )
 
 
 # ---------------------- TASK SERVICE ----------------------
@@ -674,104 +1217,203 @@ async def gateway_list_rumors(request: Request):
 
 
 # ---------------------- TOWN SERVICE ----------------------
-@app.get("/api/town")
-async def town_list(request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{TOWN_SERVICE_URL}/api/town"
-    return await cached_proxy(service_url, request, user, ttl=15)
 
+@app.get("/api/town")
+async def town_list(user: AuthUser = Depends(verify_token)):
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {
+            "type": "GET_TOWN",
+            "data": {},
+            "metadata": {"request_id": str(uuid4())}
+        }
+    )
+    return resp["data"]
 
 @app.get("/api/town/lobbies/{lobby_id}/locations/{location_id}/occupants")
-async def town_occupants(lobby_id: int, location_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{TOWN_SERVICE_URL}/api/town/lobbies/{lobby_id}/locations/{location_id}/occupants"
-    return await cached_proxy(service_url, request, user, ttl=10)
-
+async def town_occupants(lobby_id: int, location_id: int, user: AuthUser = Depends(verify_token)):
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {
+            "type": "GET_OCCUPANTS",
+            "data": {"lobbyId": lobby_id, "locationId": location_id}
+        }
+    )
+    return resp["data"]
 
 @app.post("/api/town/move")
 async def town_move(request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{TOWN_SERVICE_URL}/api/town/move"
-    return await proxy_request(service_url, request, user)
-
+    body = await request.json()
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {"type": "MOVE", "data": body}
+    )
+    return resp["data"]
 
 @app.get("/api/town/movements")
-async def town_movements(request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{TOWN_SERVICE_URL}/api/town/movements"
-    return await cached_proxy(service_url, request, user, ttl=10)
-
+async def town_movements(user: AuthUser = Depends(verify_token)):
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {"type": "GET_MOVEMENTS", "data": {}}
+    )
+    return resp["data"]
 
 @app.get("/api/town/phase/{lobby_id}")
-async def get_town_phase(lobby_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{TOWN_SERVICE_URL}/api/town/phase/{lobby_id}"
-    return await cached_proxy(service_url, request, user, ttl=5)
-
+async def get_town_phase(lobby_id: int, user: AuthUser = Depends(verify_token)):
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {"type": "GET_PHASE", "data": {"lobbyId": lobby_id}}
+    )
+    return resp["data"]
 
 @app.post("/api/town/phase/{lobby_id}/toggle")
-async def toggle_town_phase(lobby_id: int, request: Request, user: AuthUser = Depends(require_roles("admin"))):
-    service_url = f"{TOWN_SERVICE_URL}/api/town/phase/{lobby_id}/toggle"
-    return await proxy_request(service_url, request, user)
+async def toggle_town_phase(lobby_id: int, user: AuthUser = Depends(require_roles("admin"))):
+    resp = await brokerClient.publish_and_wait(
+        "gateway.town-service.request",
+        {"type": "TOGGLE_PHASE", "data": {"lobbyId": lobby_id}}
+    )
+    return resp["data"]
 
 
 # ---------------------- CHARACTER SERVICE ----------------------
+
 @app.get("/api/characters")
-async def get_all_characters(request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters"
-    return await cached_proxy(service_url, request, user, ttl=20)
+async def get_all_characters(user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "type": "GET_ALL_CHARACTERS",
+            "data": {},
+            "metadata": {"request_id": str(uuid4())},
+        },
+    )
+    return response.get("data")
 
 
 @app.get("/api/characters/user/{user_id}")
-async def get_character_by_user(user_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}"
-    return await cached_proxy(service_url, request, user, ttl=15)
+async def get_character_by_user(user_id: str, user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "type": "GET_CHARACTERS_BY_USER",
+            "data": {"userId": user_id},
+            "metadata": {"request_id": str(uuid4())},
+        },
+    )
+    return response.get("data")
 
 
 @app.patch("/api/characters/user/{user_id}")
 async def update_character(user_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}"
-    return await proxy_request(service_url, request, user)
+    body = await request.json()
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "type": "UPDATE_CHARACTERS_BY_USER",
+            "data": {"userId": user_id, "update": body},
+            "metadata": {"request_id": str(uuid4())},
+        },
+    )
+    return response.get("data")
 
 
 @app.get("/api/characters/user/{user_id}/balance")
-async def get_balance(user_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}/balance"
-    return await cached_proxy(service_url, request, user, ttl=15)
+async def get_balance(user_id: str, user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "type": "GET_BALANCE",
+            "data": {"userId": user_id},
+            "metadata": {"request_id": str(uuid4())},
+        },
+    )
+    return response.get("data")
 
 
 @app.post("/api/characters/user/{user_id}/add-gold")
-async def add_gold(user_id: str, request: Request, user: AuthUser = Depends(get_user_or_internal)):  # CHANGED THIS LINE
+async def add_gold(user_id: str, request: Request, user: AuthUser = Depends(get_user_or_internal)):
     if not user.roles:
-        raise HTTPException(status_code=403, detail="Cannot add gold. User not authorized")
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/user/{user_id}/add-gold"
-    return await proxy_request(service_url, request, user)
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    body = await request.json()
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "type": "ADD_GOLD",
+            "data": {"userId": user_id, **body},
+            "metadata": {"request_id": str(uuid4())},
+        },
+    )
+    return response.get("data")
 
 
 @app.get("/api/characters/{character_id}")
-async def get_character_by_id(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/api/characters/{character_id}"
-    return await cached_proxy(service_url, request, user, ttl=15)
+async def get_character_by_id(character_id: str, user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "type": "GET_CHARACTER_BY_ID",
+            "data": {"characterId": character_id},
+            "metadata": {"request_id": str(uuid4())},
+        },
+    )
+    return response.get("data")
+
 
 @app.get("/api/character/{character_id}/role")
-async def get_character_role(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/role"
-    return await cached_proxy(service_url, request, user, ttl=10)
+async def get_character_role(character_id: str, user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "type": "GET_ROLE",
+            "data": {"characterId": character_id},
+            "metadata": {"request_id": str(uuid4())},
+        },
+    )
+    return response.get("data")
+
 
 @app.get("/api/character/{character_id}/currency")
-async def get_character_currency(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/currency"
-    return await cached_proxy(service_url, request, user, ttl=5)
+async def get_character_currency(character_id: str, user: AuthUser = Depends(verify_token)):
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "type": "GET_CURRENCY",
+            "data": {"characterId": character_id},
+            "metadata": {"request_id": str(uuid4())},
+        },
+    )
+    return response.get("data")
 
-@app.get("/api/character/{character_id}/inventory")
-async def get_character_inventory(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/inventory"
-    return await cached_proxy(service_url, request, user, ttl=10)
 
 @app.post("/api/character/{character_id}/inventory/add")
-async def add_item_to_inventory(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/inventory/add"
-    return await proxy_request(service_url, request, user)
+async def add_item_to_inventory(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    body = await request.json()
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "type": "INVENTORY_ADD",
+            "data": {"characterId": character_id, **body},
+            "metadata": {"request_id": str(uuid4())},
+        },
+    )
+    return response.get("data")
+
 
 @app.post("/api/character/{character_id}/inventory/use")
-async def use_inventory_item(character_id: int, request: Request, user: AuthUser = Depends(verify_token)):
-    service_url = f"{CHARACTER_SERVICE_URL}/character/{character_id}/inventory/use"
-    return await proxy_request(service_url, request, user)
+async def use_item(character_id: str, request: Request, user: AuthUser = Depends(verify_token)):
+    body = await request.json()
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.character-service.request",
+        message={
+            "type": "INVENTORY_USE",
+            "data": {"characterId": character_id, **body},
+            "metadata": {"request_id": str(uuid4())},
+        },
+    )
+    return response.get("data")
+
+
 
 
 # ---------------------- SHOP SERVICE ----------------------

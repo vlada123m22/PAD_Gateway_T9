@@ -1,10 +1,6 @@
-# PAD_Gateway_T9# Mafia Platform
+# Mafia Platform Gateway
 
-# PAD Gateway T9
-
-## Overview
-
-PAD Gateway T9 is a FastAPI-based API gateway for a multi-service game backend. It proxies requests to various microservices, provides authentication and caching, and exposes admin endpoints for service monitoring and log retrieval. The project is containerized using Docker and orchestrated with Docker Compose, supporting HAProxy load balancing and integration with the ELK stack for centralized logging.
+PAD Gateway T9 is the central entry point for a multi-service game backend. It handles user authentication, request caching, and exposes administrative endpoints for service monitoring and log retrieval. All communication with backend microservices is routed through a Message Broker, ensuring decoupled, asynchronous, and reliable service-to-service interactions. The Gateway is containerized with Docker, orchestrated via Docker Compose, and integrates with centralized logging and monitoring tools for observability.
 
 ## Features
 
@@ -14,7 +10,6 @@ PAD Gateway T9 is a FastAPI-based API gateway for a multi-service game backend. 
 - **Service Discovery**: Auto-discovers running Docker services for admin endpoints.
 - **Admin Endpoints**: Download logs from all services as a ZIP, list running services, view gateway stats.
 - **Logging**: Integrated with ELK stack (Elasticsearch, Logstash, Kibana, Filebeat).
-- **Load Balancing**: HAProxy configuration for service routing and health checks.
 
 ## Architecture
 
@@ -136,7 +131,7 @@ This project is intended for educational use. See individual microservice reposi
 #### Branches and branches naming conventions
 
 - main - the main branch of the project
-- **naming convention for other branches:** `[<issue-name><issue-description>]`
+- **naming convention for other branches:** `[<issue-description>]`
 
 #### Pushing
 
@@ -148,4 +143,4 @@ This project is intended for educational use. See individual microservice reposi
 - A PR needs one approval before being merged (unless the user who is pushing has bybass permissions)
 - Merging strategy: merge commit
 
-### Create an index in Kibana ```docker-logs*```
+#### Create an index in Kibana ```docker-logs*```
