@@ -1,6 +1,6 @@
 from uuid import uuid4
 from fastapi import Header
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, Body
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import httpx
@@ -698,24 +698,33 @@ async def join_lobby(lobby_id: str, request: Request):
 @app.post("/api/lobbies/{lobby_id}/start")
 async def start_game(
     lobby_id: str,
-    payload: dict,
-    user: AuthUser = Depends(get_user_or_internal)
+    payload: dict = Body(default_factory=dict),  # body is now OPTIONAL, defaults to {}
+    user: AuthUser = Depends(get_user_or_internal),
 ):
-    result = await brokerClient.publish_and_wait(
-        "lobby.start_game",
-        {
-            "correlationId": "unused",
-            "data": {
-                **payload,
-                "lobby_id": lobby_id,
-                "user_id": user.user_id,  # <-- IMPORTANT
-            },
+
+    message = {
+        "type": "START_GAME",
+        "data": {
+            **payload,
+            "lobby_id": lobby_id,
+            "user_id": user.user_id,
         },
-        timeout=5,
+        "metadata": {"request_id": str(uuid4())},
+    }
+
+    # Send to game-service and wait for a reply
+    response = await brokerClient.publish_and_wait(
+        queue="gateway.game-service.request",
+        message=message,
+        timeout=BACKEND_TIMEOUT,
     )
 
-    status = result.get("status_code", 500)
-    return JSONResponse(status_code=status, content=result)
+    # Mirror the pattern used in create_lobby / join_lobby
+    return Response(
+        content=json.dumps(response.get("data", {})),
+        status_code=response.get("status_code", 200),
+        media_type="application/json",
+    )
 
 @app.patch("/api/lobbies/{lobby_id}/state")
 async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
