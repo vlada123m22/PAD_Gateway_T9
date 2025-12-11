@@ -698,7 +698,8 @@ async def join_lobby(lobby_id: str, request: Request):
 @app.post("/api/lobbies/{lobby_id}/start")
 async def start_game(
     lobby_id: str,
-    payload: dict
+    payload: dict,
+    user: AuthUser = Depends(get_user_or_internal)
 ):
     result = await brokerClient.publish_and_wait(
         "lobby.start_game",
@@ -706,7 +707,8 @@ async def start_game(
             "correlationId": "unused",
             "data": {
                 **payload,
-                "lobby_id": lobby_id
+                "lobby_id": lobby_id,
+                "user_id": user.user_id,  # <-- IMPORTANT
             },
         },
         timeout=5,
