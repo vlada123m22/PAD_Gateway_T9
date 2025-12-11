@@ -1,6 +1,6 @@
 from uuid import uuid4
 from fastapi import Header
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, Body
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import httpx
@@ -931,24 +931,24 @@ async def get_lobbies(request: Request):
     )
 
 @app.get("/api/lobbies/{lobby_id}")
-async def get_lobby(lobby_id: str, user: AuthUser = Depends(verify_token)):
-    message = {
-        "type": "GET_LOBBY",
-        "data": {"lobby_id": lobby_id, "user_id": user.id},
-        "metadata": {"request_id": str(uuid4())}
-    }
-    
-    response = await brokerClient.publish_and_wait(
-        queue="gateway.game-service.request",
-        message=message,
-        timeout=BACKEND_TIMEOUT
+async def get_lobby(
+    lobby_id: str,
+    user: AuthUser = Depends(get_user_or_internal)
+):
+    result = await brokerClient.publish_and_wait(
+        "lobby.get",
+        {
+            "correlationId": "unused",
+            "data": {
+                "lobby_id": lobby_id,
+                "user_id": user.user_id,
+            },
+        },
+        timeout=5,
     )
-    
-    return Response(
-        content=json.dumps(response.get("data", {})),
-        status_code=response.get("status_code", 200),
-        media_type="application/json"
-    )
+
+    status = result.get("status_code", 500)
+    return JSONResponse(status_code=status, content=result)
 
 @app.post("/api/lobbies/{lobby_id}/join")
 async def join_lobby(lobby_id: str, request: Request):
@@ -974,26 +974,34 @@ async def join_lobby(lobby_id: str, request: Request):
     )
 
 @app.post("/api/lobbies/{lobby_id}/start")
-async def start_game(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    body_bytes = await request.body()
-    payload = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+async def start_game(
+    lobby_id: str,
+    payload: dict = Body(default_factory=dict),  # body is now OPTIONAL, defaults to {}
+    user: AuthUser = Depends(get_user_or_internal),
+):
 
     message = {
         "type": "START_GAME",
-        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
-        "metadata": {"request_id": str(uuid4())}
+        "data": {
+            **payload,
+            "lobby_id": lobby_id,
+            "user_id": user.user_id,
+        },
+        "metadata": {"request_id": str(uuid4())},
     }
 
+    # Send to game-service and wait for a reply
     response = await brokerClient.publish_and_wait(
         queue="gateway.game-service.request",
         message=message,
-        timeout=BACKEND_TIMEOUT
+        timeout=BACKEND_TIMEOUT,
     )
 
+    # Mirror the pattern used in create_lobby / join_lobby
     return Response(
         content=json.dumps(response.get("data", {})),
         status_code=response.get("status_code", 200),
-        media_type="application/json"
+        media_type="application/json",
     )
 
 @app.patch("/api/lobbies/{lobby_id}/state")
@@ -1003,7 +1011,7 @@ async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = D
 
     message = {
         "type": "UPDATE_LOBBY_STATE",
-        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
+        "data": {**payload, "lobby_id": lobby_id, "user_id": user.user_id},
         "metadata": {"request_id": str(uuid4())}
     }
 
@@ -1027,7 +1035,7 @@ async def get_character(lobby_id: str, character_id: str, user: AuthUser = Depen
         "data": {
             "lobby_id": lobby_id,
             "character_id": character_id,
-            "user_id": user.id
+            "user_id": user.user_id
         },
         "metadata": {"request_id": str(uuid4())}
     }
@@ -1049,7 +1057,7 @@ async def get_character(lobby_id: str, character_id: str, user: AuthUser = Depen
 async def get_phase(lobby_id: str, user: AuthUser = Depends(verify_token)):
     message = {
         "type": "GET_PHASE",
-        "data": {"lobby_id": lobby_id, "user_id": user.id},
+        "data": {"lobby_id": lobby_id, "user_id": user.user_id},
         "metadata": {"request_id": str(uuid4())}
     }
     
@@ -1072,7 +1080,7 @@ async def force_phase(lobby_id: str, request: Request, user: AuthUser = Depends(
 
     message = {
         "type": "FORCE_PHASE",
-        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
+        "data": {**payload, "lobby_id": lobby_id, "user_id": user.user_id},
         "metadata": {"request_id": str(uuid4())}
     }
 
