@@ -1,27 +1,47 @@
 services:
-  #service_discovery:
-  #  image: nadea39/service-discovery:v1.2.0
-  #  container_name: service_discovery_container
-  #  ports:
-  #    - "8500:8500"
-  #  environment:
-  #    - PYTHONUNBUFFERED=1
-  #  networks:
-  #    - backend
-  #
-  #notifications:
-  #  image: nadea39/notification-service:v1.0.0
-  #  container_name: notifications_container
-  #  ports:
-  #    - "8600:8600"
-  #  environment:
-  #    - PYTHONUNBUFFERED=1
-  #    - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
-  #    - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
-  #    - SERVICE_DISCOVERY_URL=http://service_discovery:8500
-  #  networks:
-  #    - backend
-  #
+
+  service_discovery:
+    image: nadea39/service-discovery:v1.3.0
+    container_name: service_discovery_container
+    ports:
+      - "8500:8500"
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - backend
+
+  notifications:
+    image: nadea39/notification-service:v1.0.0
+    container_name: notifications_container
+    ports:
+      - "8600:8600"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - SERVICE_DISCOVERY_URL=http://service_discovery:8500
+    networks:
+      - backend
+      
+  message-broker:
+    image: livia994/message-broker:latest
+    container_name: message_broker_container
+    ports:
+      - "8001:8001"  # REST API
+      - "50051:50051" # gRPC
+    environment:
+      - BROKER_DATA_DIR=/data
+    volumes:
+      - broker_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - backend
+    
   # HAProxy Load Balancer
   load-balancer:
     image: haproxy:2.8-alpine
@@ -94,78 +114,6 @@ services:
       retries: 5
 
   # =============================
-  # ELK Stack + Filebeat setup
-  # =============================
-
-  #elasticsearch:
-  #  image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
-  #  container_name: elasticsearch
-  #  environment:
-  #    - discovery.type=single-node
-  #    - ES_JAVA_OPTS=-Xms1g -Xmx1g
-  #    - xpack.security.enabled=false
-  #    - xpack.security.http.ssl.enabled=false
-  #  ulimits:
-  #    memlock:
-  #      soft: -1
-  #      hard: -1
-  #  volumes:
-  #    - elasticsearch_data:/usr/share/elasticsearch/data
-  #  ports:
-  #    - "9200:9200"
-  #  networks:
-  #    - backend
-  #  restart: unless-stopped
-  #  healthcheck:
-  #    test: ["CMD-SHELL", "curl -f http://localhost:9200 || exit 1"]
-  #    interval: 10s
-  #    timeout: 5s
-  #    retries: 10
-  #
-  #logstash:
-  #  image: docker.elastic.co/logstash/logstash:8.15.0
-  #  container_name: logstash
-  #  depends_on:
-  #    - elasticsearch
-  #  volumes:
-  #    - ./elk/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
-  #  ports:
-  #    - "5044:5044"
-  #    - "9600:9600"
-  #  networks:
-  #    - backend
-  #  restart: unless-stopped
-  #
-  #kibana:
-  #  image: docker.elastic.co/kibana/kibana:8.15.0
-  #  container_name: kibana
-  #  environment:
-  #    - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-  #  ports:
-  #    - "5601:5601"
-  #  depends_on:
-  #    - elasticsearch
-  #  networks:
-  #    - backend
-  #  restart: unless-stopped
-  #
-  #filebeat:
-  #  image: docker.elastic.co/beats/filebeat:8.15.0
-  #  container_name: filebeat
-  #  user: root
-  #  command: ["--strict.perms=false"]
-  #  volumes:
-  #    - /var/lib/docker/containers:/var/lib/docker/containers:ro
-  #    - /var/run/docker.sock:/var/run/docker.sock:ro
-  #    - ./elk/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-  #    - filebeat_data:/usr/share/filebeat/data
-  #  depends_on:
-  #    - logstash
-  #  networks:
-  #    - backend
-  #  restart: unless-stopped
-  #
-  # =============================
   # GATEWAY SERVICE
   # =============================
 
@@ -192,7 +140,7 @@ services:
       CACHE_SHARD_URLS: redis://gateway_cache_1:6379,redis://gateway_cache_2:6379,redis://gateway_cache_3:6379
       CACHE_DEFAULT_TTL: 15
       VIRTUAL_NODES: 150
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      #INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
     depends_on:
       gateway_cache_1:
         condition: service_healthy
@@ -631,7 +579,7 @@ services:
       - .env
 
   game_service:
-    image: nadea39/gameservice:v1.0.7
+    image: nadea39/gameservice:latest #v1.0.7
     deploy:
       replicas: 1
     environment:
@@ -692,18 +640,18 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
     restart: unless-stopped
 
-  task-proxy:
-    image: nginx:alpine
-    container_name: task-proxy
-    volumes:
-      - ./nginx-proxy.conf:/etc/nginx/templates/nginx.conf.template:ro
-    environment:
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
-    networks:
-      - backend
-    depends_on:
-      - gateway
-    restart: unless-stopped
+  #task-proxy:
+  #  image: nginx:alpine
+  #  container_name: task-proxy
+  #  volumes:
+  #    - ./nginx-proxy.conf:/etc/nginx/templates/nginx.conf.template:ro
+  #  environment:
+  #    INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+  #  networks:
+  #    - backend
+  #  depends_on:
+  #    - gateway
+  #  restart: unless-stopped
 
   task-service:
     image: vladamusin/task_service:0.0.18
@@ -1002,3 +950,4 @@ volumes:
   postgres_warehouse:
   airflow_postgres:
   metabase_data:
+  broker_data:
