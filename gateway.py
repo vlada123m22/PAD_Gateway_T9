@@ -702,7 +702,7 @@ async def start_game(lobby_id: str, request: Request, user: AuthUser = Depends(v
 
     message = {
         "type": "START_GAME",
-        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
+        "data": {**payload, "lobby_id": lobby_id, "user_id": user.user_id},
         "metadata": {"request_id": str(uuid4())}
     }
 
