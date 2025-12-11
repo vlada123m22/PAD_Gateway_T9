@@ -653,24 +653,24 @@ async def get_lobbies(request: Request):
     )
 
 @app.get("/api/lobbies/{lobby_id}")
-async def get_lobby(lobby_id: str, user: AuthUser = Depends(verify_token)):
-    message = {
-        "type": "GET_LOBBY",
-        "data": {"lobby_id": lobby_id, "user_id": user.id},
-        "metadata": {"request_id": str(uuid4())}
-    }
-    
-    response = await brokerClient.publish_and_wait(
-        queue="gateway.game-service.request",
-        message=message,
-        timeout=BACKEND_TIMEOUT
+async def get_lobby(
+    lobby_id: str,
+    user: AuthUser = Depends(get_user_or_internal)
+):
+    result = await brokerClient.publish_and_wait(
+        "lobby.get",
+        {
+            "correlationId": "unused",
+            "data": {
+                "lobby_id": lobby_id,
+                "user_id": user.user_id,
+            },
+        },
+        timeout=5,
     )
-    
-    return Response(
-        content=json.dumps(response.get("data", {})),
-        status_code=response.get("status_code", 200),
-        media_type="application/json"
-    )
+
+    status = result.get("status_code", 500)
+    return JSONResponse(status_code=status, content=result)
 
 @app.post("/api/lobbies/{lobby_id}/join")
 async def join_lobby(lobby_id: str, request: Request):
@@ -696,27 +696,27 @@ async def join_lobby(lobby_id: str, request: Request):
     )
 
 @app.post("/api/lobbies/{lobby_id}/start")
-async def start_game(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
-    body_bytes = await request.body()
-    payload = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
-
-    message = {
-        "type": "START_GAME",
-        "data": {**payload, "lobby_id": lobby_id, "user_id": user.user_id},
-        "metadata": {"request_id": str(uuid4())}
-    }
-
-    response = await brokerClient.publish_and_wait(
-        queue="gateway.game-service.request",
-        message=message,
-        timeout=BACKEND_TIMEOUT
+async def start_game(
+    lobby_id: str,
+    payload: dict,
+    user: AuthUser = Depends(get_user_or_internal)
+):
+    result = await brokerClient.publish_and_wait(
+        "lobby.start_game",
+        {
+            "correlationId": "unused",
+            "data": {
+                **payload,
+                "lobby_id": lobby_id,
+                "user_id": user.user_id,
+                "username": user.username,
+            },
+        },
+        timeout=5,
     )
 
-    return Response(
-        content=json.dumps(response.get("data", {})),
-        status_code=response.get("status_code", 200),
-        media_type="application/json"
-    )
+    status = result.get("status_code", 500)
+    return JSONResponse(status_code=status, content=result)
 
 @app.patch("/api/lobbies/{lobby_id}/state")
 async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = Depends(verify_token)):
