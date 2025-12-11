@@ -725,7 +725,7 @@ async def update_lobby_state(lobby_id: str, request: Request, user: AuthUser = D
 
     message = {
         "type": "UPDATE_LOBBY_STATE",
-        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
+        "data": {**payload, "lobby_id": lobby_id, "user_id": user.user_id},
         "metadata": {"request_id": str(uuid4())}
     }
 
@@ -749,7 +749,7 @@ async def get_character(lobby_id: str, character_id: str, user: AuthUser = Depen
         "data": {
             "lobby_id": lobby_id,
             "character_id": character_id,
-            "user_id": user.id
+            "user_id": user.user_id
         },
         "metadata": {"request_id": str(uuid4())}
     }
@@ -771,7 +771,7 @@ async def get_character(lobby_id: str, character_id: str, user: AuthUser = Depen
 async def get_phase(lobby_id: str, user: AuthUser = Depends(verify_token)):
     message = {
         "type": "GET_PHASE",
-        "data": {"lobby_id": lobby_id, "user_id": user.id},
+        "data": {"lobby_id": lobby_id, "user_id": user.user_id},
         "metadata": {"request_id": str(uuid4())}
     }
     
@@ -794,7 +794,7 @@ async def force_phase(lobby_id: str, request: Request, user: AuthUser = Depends(
 
     message = {
         "type": "FORCE_PHASE",
-        "data": {**payload, "lobby_id": lobby_id, "user_id": user.id},
+        "data": {**payload, "lobby_id": lobby_id, "user_id": user.user_id},
         "metadata": {"request_id": str(uuid4())}
     }
 
